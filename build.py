@@ -55,6 +55,10 @@ def load_paper(path: Path, source: Path) -> dict:
     for key in ("title", "summary"):
         if not isinstance(meta.get(key), str) or not meta[key].strip():
             raise ValueError(f"{path}: {key} 必須是非空字串")
+    # Older notes remain buildable while their plain-language introduction is added.
+    one_liner = meta.setdefault("one_liner", meta["summary"])
+    if not isinstance(one_liner, str) or not one_liner.strip():
+        raise ValueError(f"{path}: one_liner 必須是非空字串")
     for key in ("published", "added"):
         value = str(meta.get(key, ""))
         try:
@@ -163,6 +167,13 @@ def build(source: Path, output: Path) -> int:
         return '<div class="tags">' + "".join(
             f'<a class="tag" href="{relative_url(tag_path(t), page)}">{escape(t)}</a>' for t in tags) + "</div>"
 
+    def overview(meta):
+        content = (f'<div class="plain-summary"><span class="summary-label">一句話用途</span>'
+                   f'<p>{escape(meta["one_liner"])}</p></div>')
+        if meta["summary"] != meta["one_liner"]:
+            content += f'<p class="summary-detail">{escape(meta["summary"])}</p>'
+        return content
+
     def page(path, title, description, content):
         nav = '<p><strong>技術分類</strong></p><ul>' + "".join(
             f'<li><a href="{relative_url(Path(c) / "index.html", path)}">{escape(LABELS.get(c, c))}</a></li>'
@@ -178,9 +189,9 @@ def build(source: Path, output: Path) -> int:
         for p in entries:
             m = p["meta"]
             content += (f'<article class="paper-card"><h2><a href="{relative_url(p["output"], path)}">'
-                        f'{escape(m["title"])}</a></h2><p class="meta">發表 {m["published"]} · '
+                        f'{escape(m["title"])}</a></h2>{overview(m)}<p class="meta">發表 {m["published"]} · '
                         f'收錄 {m["added"]} · {escape(LABELS.get(p["category"], p["category"]))}</p>'
-                        f'<p>{escape(m["summary"])}</p>{tags_html(m["tags"], path)}</article>')
+                        f'{tags_html(m["tags"], path)}</article>')
         page(path, title, f"{title}，共 {len(entries)} 篇技術論文筆記。", content)
 
     listing(Path("index.html"), "最新收錄", papers)
@@ -197,7 +208,7 @@ def build(source: Path, output: Path) -> int:
         rewrite.close()
         links = " · ".join(f'<a href="{escape(m[k], quote=True)}">{label}</a>'
                            for k, label in (("paper_url", "原始論文"), ("code_url", "程式碼")) if m[k])
-        details = (f'<section class="paper-info" aria-label="論文資料"><p>{escape(m["summary"])}</p>'
+        details = (f'<section class="paper-info" aria-label="論文資料">{overview(m)}'
                    f'<p class="meta">發表 {m["published"]} · 收錄 {m["added"]}<br>'
                    f'{escape("、".join(m["authors"]))} · {escape(m["venue"])}</p>'
                    f'<p>{links}</p>{tags_html(m["tags"], p["output"])}</section>')

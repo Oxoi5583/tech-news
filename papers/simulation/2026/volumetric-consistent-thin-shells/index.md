@@ -17,198 +17,111 @@ tags:
   - finite-element-method
   - mech-simulation
   - damage-simulation
-summary: "從完整 3D 體積彈性推導薄殼模型，在只保留 surface mesh 的前提下加入厚度自由度，使薄板能表現 Poisson contraction 與彎曲造成的厚度變化，接近 3D solid 的材料反應而不必建立 volumetric mesh。"
+one_liner: "模擬薄板被拉扯或彎曲時如何改變厚度，讓變形結果更接近真正有厚度的材料。"
+summary: "仍以一層表面網格記錄薄板，但額外計算厚度的伸縮，避免為整個厚度建立很多層小塊；它處理的是變形，破裂和永久凹陷仍需另外設計。"
 ---
 
 # Beyond Kirchhoff-Love: A Volumetric Approach to Thin-Shell Mechanics
 
-> 發表日期欄位使用 SIGGRAPH Asia 2026 會議首日（2026-12-01）；作者的正式 citation 目前只標示 ACM TOG 45(6), Dec 2026。
+> 日期說明：既有發表日期欄位使用 SIGGRAPH Asia 2026 會議首日（2026-12-01），不是已核實的論文上線日；作者引用資料標示 ACM TOG 45(6), Dec 2026。收錄日期與這個日期分開看。
 
-## 解決甚麼問題
+## 先用一個例子理解
 
-很多薄物件，例如金屬板、塑膠片、橡膠殼、車身或機甲外裝甲，本質上仍然是有厚度的 3D 材料。
+拿一片橡膠向左右拉，它不只會變長，通常也會變窄或變薄。彎曲一塊薄板時，內外側受到的拉伸和壓縮也不同。
 
-最完整的模擬方法，是把整個厚度切成 tetrahedra，再使用 volumetric FEM。但如果物件很薄，這會帶來大量元素與很高的計算成本。
+如果模擬只記錄「這張面的點移到哪裡」，卻把厚度變化限制得很死，就可能漏掉這些反應。
 
-因此圖形學通常使用 Kirchhoff-Love（KL）thin shell，把物件壓成一張中面 surface mesh。KL shell 很便宜，但它假定穿過厚度的材料線在變形後仍然保持筆直、垂直於中面，而且不伸縮。
+這篇研究希望保留薄板模擬較精簡的資料，同時把重要的厚度變化放回計算中。
 
-這個限制會丟掉真正 3D 材料的一些重要反應，例如：
+## 原本的做法有甚麼困難
 
-- 材料被拉長時會因 Poisson effect 變薄；
-- 彎曲時，厚度方向會出現非線性變化；
-- 不同 3D hyperelastic material 的厚度反應不一定能被傳統 shell heuristic 正確重現。
+**薄殼（thin shell）**是用來描述「相對於長寬很薄，但仍有厚度」的物件，例如車殼、橡膠片或薄金屬板。它不是完全沒有厚度的紙面。
 
-這篇工作的目標是：**保留 thin-shell 的低成本 representation，但重新把最重要的 3D thickness physics 放回來。**
+較完整的做法會把物件內部切成很多小塊，再計算每塊如何受力和變形。這類 **有限元素法（Finite Element Method，FEM）**，就是把複雜物件拆成小元素，再合起來求整體行為的方法。三維體積模擬常使用**四面體**，也就是有四個三角面的基本立體。
 
-## 核心做法
+但對很薄的物件，如果還要細分厚度，就可能產生很多小元素。因此常見的 **Kirchhoff–Love（KL）薄殼模型**會只記錄中間那層表面，並對厚度方向的變形作出較強限制。
 
-方法不是額外替 shell 加一條經驗式厚度規則，而是從完整 3D volumetric elasticity 開始推導。
+在論文所比較的傳統形式裡，穿過厚度的材料線保持筆直、垂直於中間表面，且不伸縮。這會限制模型描述厚度變化的能力。
 
-對 mid-surface 上的每個位置，除了原本的 surface deformation，加入一個 scalar thickness variable：
+其中 **卜松效應（Poisson effect）**是材料沿一個方向被拉長時，其他方向也會一起變形的現象；像拉長橡膠時會變細。不同材料的反應不一定相同。
 
-```text
-surface position
-      +
-local thickness rho
-```
+## 它是怎樣做到的
 
-`rho` 表示當前位置的厚度伸縮，因此當材料被拉長時，可以自然出現 thickness contraction。
+它仍然以**表面網格**記錄薄板，也就是把一層表面分成許多相連的小三角形，但增加少量描述厚度的數值。
 
-作者進一步分析完整 3D deformation 在厚度方向的重要模式，保留最低階的兩種：
+1. **記錄表面如何移動。**這部分與一般薄板模擬相似。
+2. **加入局部厚度伸縮量 `rho`。**它用來描述這裡比原來變厚還是變薄。
+3. **需要時再加入 `zeta`。**它描述彎曲時更複雜的厚度方向變化，而不只把整個厚度等比例放大或縮小。
+4. **從三維材料的受力規則推導計算。**厚度變化與表面拉伸、彎曲一起求解，而不是最後隨意補一個外觀效果。
 
-1. **Linear normal mode**：整體縮放局部厚度，由 `rho` 表示。
-2. **Quadratic normal mode**：描述彎曲造成的厚度方向非線性，由可選的 `zeta` 表示。
+方法保留的是厚度方向最重要的少數變形方式，因此不必沿厚度真的堆出很多層元素。
 
-`zeta` 可以透過 static condensation 消去，因此不一定需要成為 global solver 的永久自由度。
+`zeta` 還可以先在局部計算中消去，減少整個系統同時要解的未知數。這個步驟叫 **靜態凝聚（static condensation）**；不是忽略它的影響，而是把影響合併到較少的變數裡。
 
-整體思想可以簡化成：
+## 與其他方法有甚麼差別
 
-```text
-完整 3D solid elasticity
-        ↓
-分析 thickness-direction modes
-        ↓
-只保留最重要的 1–2 個 mode
-        ↓
-解析積分掉整個厚度
-        ↓
-surface mesh + rho (+ optional zeta)
-```
-
-從任意 isotropic hyperelastic energy density 出發，作者推導出 closed-form shell energy，以及 implementation-ready 的 gradient 與 Hessian。這樣可以避免建立 volumetric mesh，也不用沿厚度做 numerical quadrature。
-
-## 與現有方法的差別
-
-最簡單的比較是：
-
-| 方法 | 如何理解薄物件 |
+| 做法 | 如何處理厚度 |
 | --- | --- |
-| Cloth / heuristic shell | 一張會拉伸和彎曲的面 |
-| Kirchhoff-Love shell | 3D solid 的薄極限，但厚度方向被強力限制 |
-| Full volumetric FEM | 真正模擬整個有厚度的 3D 材料 |
-| **這篇方法** | **只保留 surface mesh，但保留 3D solid 最重要的厚度變形模式** |
+| 依經驗設計的薄片模擬 | 可能只處理表面拉伸和彎曲，厚度另外指定 |
+| 論文比較的傳統 KL 薄殼 | 對厚度方向施加較強限制，漏掉部分三維材料反應 |
+| 完整三維體積模擬 | 在物件內部配置元素，計算較完整的變形 |
+| 這篇方法 | 使用表面網格，加上少量厚度變數，保留更多三維材料反應 |
 
-它最重要的改變不是「多一個 thickness parameter」，而是 thickness state 直接來自 volumetric elasticity 的降維。
-
-因此它想取得的是：
-
-```text
-3D FEM 的材料行為
-        ↑
-Volumetrically-consistent shell
-        ↓
-Thin shell 的資料量與計算結構
-```
+它的重點是更有根據地簡化三維材料，並不是宣稱用一個厚度數值就能描述所有變形。
 
 ## 實驗結果與限制
 
-作者在多種 isotropic hyperelastic materials、small deformation 與 large deformation case 下，將結果與完整 volumetric simulation 及 Kirchhoff-Love shell 比較。
+作者比較了多種材料和不同變形程度下的結果，包括完整三維體積模擬與 KL 薄殼。
 
-主要結果是：
+論文報告，方法能補回小幅拉伸時部分被忽略的厚度收縮，也能描述彎曲造成的厚度方向變化；在所測試的多種條件下，結果更接近完整體積模擬。
 
-- 在 small deformation 下，可恢復 KL shell 因假設而丟掉的 Poisson contraction；
-- 在 bending case 中，可捕捉 thickness-direction nonlinearities；
-- 在多種材料與較大 deformation 下，結果仍較接近 volumetric reference；
-- 不需要 volumetric meshing 或 through-thickness numerical quadrature。
+研究討論的 **各向同性材料**，是指材料性質不會因選擇哪個方向而不同；**超彈性材料模型（hyperelasticity）**則是用變形所儲存的彈性能量來描述受力的方法，常用於較大的彈性變形，不是「超級有彈性」的意思。
 
-目前公開 project page 沒有提供足以公平整理成固定倍數的逐場景 runtime benchmark，因此不應把它理解成「比 FEM 快 X 倍」。它的主要價值是用薄殼形式保留更多 volumetric material behavior。
+這份筆記沒有足夠、條件一致的逐場景速度數據，因此不寫成「比 FEM 快幾倍」。減少資料和未知數，是設計目的；實際速度仍需量測。
 
 限制包括：
 
-- 它仍然是 thin-shell model，不是完整 3D solid solver；
-- 對厚物件、複雜內部結構或真正需要完整體積 stress distribution 的問題，不應直接取代 FEM；
-- fracture、plasticity、damage propagation 並不是這篇論文本身解決的問題；
-- 若要做遊戲 runtime，collision、contact、plastic deformation 和 topology change 仍需另外設計；
-- 目前尚未看到 production game engine adoption。
+- 它仍然是薄殼近似，厚物件或複雜內部結構可能仍需完整體積模擬。
+- 彈性變形不等於永久凹陷。**塑性變形**是卸力後仍留下形狀改變，需要另外的材料規則。
+- 破裂、損傷傳播和材料撕開後的連接關係改變，都不是這篇已完成的功能。
+- 放進遊戲時，碰撞和接觸處理仍需整合；這份筆記沒有商用遊戲採用的證據。
 
-## 對遊戲開發的用途
+## 可以怎樣用在遊戲裡
 
-這種 representation 很適合「很薄，但不應被當成純 2D surface」的物件，例如：
+以下是延伸構想：讓機甲外裝甲的厚度成為會隨變形更新的資料，而不是永遠固定的一個設定值。
 
-- 機甲外裝甲；
-- 車身與機翼；
-- 薄金屬板；
-- 塑膠或橡膠外殼；
-- 可變形大型薄殼建築；
-- 某些軟硬混合機械表面。
+例如一片薄裝甲被拉伸，局部厚度改變；穿透計算之後便可以讀取這個新厚度。畫面上的變形和玩法使用同一份狀態，可能比互不相干的固定數值更一致。
 
-對機甲遊戲尤其有趣，因為 shell 的厚度 `rho` 可以直接成為 gameplay state。
+但炮彈能否穿透，還受到材料、入射角度、速度和損傷等因素影響。**這篇提供的是厚度與變形模型，不是完整的裝甲穿透模型。**熱容量或導熱也可以考慮共用幾何資料，但同樣需要另外計算。
 
-例如：
+## 想實作時再看
 
-```text
-炮擊 / 持續受力
-      ↓
-局部 shell stretch / bend
-      ↓
-local thickness 改變
-      ↓
-裝甲穿透能力改變
-```
+第一個原型可以是一張簡單的三角形薄片：固定一端，拉動另一端，觀察長度增加時厚度如何改變，再與相同材料的三維小塊模擬比較。
 
-進一步還可以讓同一個 thickness state 影響：
-
-- armour penetration threshold；
-- heat capacity；
-- thermal conduction；
-- visual deformation；
-- 後續 plasticity / damage model。
-
-這樣裝甲厚度不再只是 asset metadata，而是真正會隨 deformation 改變的 runtime physical state。
-
-## 個人筆記
-
-這篇真正值得記住的不是「shell 多了一個厚度變量」，而是：
-
-> 不要把薄物件直接降成沒有厚度的面，而是把完整 3D 物理沿厚度方向壓縮成少數最重要的自由度。
-
-這個思路很適合專用 engine solution。對機甲或載具，不需要整台機體做 full tetrahedral FEM，也可以讓外裝甲擁有比普通 cloth / shell 更像真實材料的行為。
-
-### 最小 Prototype
-
-先做一張簡單 triangle sheet：
+可以先用如下結構理解要保存的資料；`Vec3` 表示三個座標，這不是論文完整的求解器：
 
 ```cpp
-struct ShellVertex
-{
+struct ShellVertex {
     Vec3 position;
     float thickness;
 };
 ```
 
-第一版只驗證最簡單的 Poisson response：
+實際的 `rho` 是厚度伸縮變數，與這裡直接保存厚度的示意不完全相同，需要按照論文定義換算。
 
-```text
-左右拉長
-   ↓
-surface stretch 增加
-   ↓
-thickness 減少
-```
+閱讀推導時會遇到：
 
-拿一個小型 3D FEM block 當 reference，比較相同材料在拉伸下的長度與厚度變化。
+| 名詞 | 在這裡的意思 |
+| --- | --- |
+| Deformation mode（變形模式） | 用少數有規律的變形方式，近似原本更複雜的變化 |
+| Energy density（能量密度） | 一小部分材料因變形儲存多少彈性能量 |
+| Gradient（梯度） | 能量對各個變形變數如何改變的資訊，可用於計算力或調整方向 |
+| Hessian（海森矩陣） | 梯度本身如何隨變數改變，供求解器決定修正幅度 |
+| Closed-form energy（封閉形式能量） | 把厚度方向的積分整理成可直接求值的公式 |
+| Numerical quadrature（數值積分） | 在若干位置取樣並加權，近似連續區域的總量 |
 
-之後依次加入：
+這篇將厚度方向的積分推導成公式，避免在厚度內再放很多取樣點來近似。實作時仍要使用論文的材料能量、導數及限制條件，不能只靠上面兩個欄位就重現結果。
 
-1. bending；
-2. nonlinear hyperelastic material；
-3. collision / contact；
-4. plastic deformation；
-5. damage / fracture coupling。
+## 個人筆記
 
-如果最後能讓 `thickness`、plastic state 與 penetration model 共享資料，會很接近一套專門給機甲與載具使用的 **Thin Armour Simulation System**。
-
-### 閱讀建議
-
-優先讀：
-
-1. 從 volumetric elasticity 推導 thickness modes 的部分；
-2. `rho` 與 `zeta` 的 kinematic ansatz；
-3. closed-form shell energy 如何由 thickness integration 得到；
-4. 實驗中與 volumetric reference、KL shell 的比較。
-
-**成熟度：** 可實作研究方法，SIGGRAPH Asia 2026 / ACM TOG；尚無 production evidence。
-
-**技術密度：** 很高。
-
-**預估閱讀時間：** 60–90 分鐘。
+值得記住的想法是：**薄物件可以只保存一層表面，但計算時仍然保留它有厚度、而且厚度會變的事實。**

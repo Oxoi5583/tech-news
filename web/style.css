@@ -19,6 +19,10 @@ h3 { font-size: 1.1rem; }
 .paper-card, .paper-info { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px 24px; margin: 18px 0; }
 .paper-card h2 { margin: 0 0 6px; font-size: 1.2rem; }
 .paper-card p { margin: 8px 0; }
+.plain-summary { border-left: 3px solid var(--accent); padding-left: 14px; margin: 16px 0; }
+.summary-label { display: block; color: var(--accent); font-size: .8rem; font-weight: 700; }
+.plain-summary p { margin: 4px 0 0; font-size: 1.1rem; font-weight: 650; line-height: 1.7; }
+.summary-detail { color: var(--muted); }
 .tags { display: flex; flex-wrap: wrap; gap: 8px; }
 .tag { font-size: .8rem; padding: 1px 9px; border: 1px solid var(--line); border-radius: 20px; text-decoration: none; }
 pre { padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; line-height: 1.6; }

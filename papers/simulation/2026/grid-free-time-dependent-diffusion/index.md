@@ -18,157 +18,101 @@ tags:
   - monte-carlo
   - grid-free
   - procedural-world
-summary: "把 Walk on Spheres / Walk on Stars 擴展到隨時間變化的熱擴散問題，不需要建立 volumetric mesh，也不需要從 t=0 一步一步 time-step 到目標時間；可直接查詢任意位置與時間的擴散狀態。"
+one_liner: "只估算你想知道的位置和時間有多熱，不必先把整個空間從頭到尾算一遍。"
+summary: "這個方法用許多隨機路徑估計熱如何傳來，適合只查少量位置；結果會有統計誤差，查得越準通常需要越多計算。"
 ---
 
 # Grid-Free Monte Carlo for Time-Dependent Diffusion
 
-## 解決甚麼問題
+## 先用一個例子理解
 
-熱傳導、污染物擴散、某些聲學／濃度／魔法場等系統通常可寫成 diffusion PDE。傳統 transient solver 通常要先把整個空間離散成 voxel、tetrahedral mesh 或其他 volumetric grid，再從初始時間開始逐步積分：
+想像一塊金屬板的左邊開始加熱。你只想知道：八秒後，右邊某個位置有多熱？
 
-```text
-建立整個 volume
-    ↓
-t = 0
-    ↓
-t + Δt
-    ↓
-t + 2Δt
-    ↓
-...
-    ↓
-目標時間 T
-```
+常見做法是把整塊板切成小格子，從第一刻開始，一小步一小步計算熱如何傳到旁邊。即使只需要一個位置的答案，也可能算了很多其他位置和中間時刻。
 
-這有兩個對大型或複雜遊戲世界很麻煩的成本：必須替整個 volume 建資料結構，而且即使只想知道少數幾個位置在某個時間的溫度，也通常需要計算大量根本不會被查詢的空間與中間時間狀態。
+這篇研究讓你直接提出「這個位置、這個時間」的問題，再用抽樣估計答案。**直接查詢不等於不用計算；它把工作集中在你真正想知道的地方。**
 
-這篇把既有的 grid-free Monte Carlo PDE 方法 Walk on Spheres（WoS）與 Walk on Stars（WoSt）擴展到 **time-dependent diffusion / heat equation**。最重要的能力是：**直接估計某個位置在指定時間的解，不需要 volumetric meshing，也不需要 sequential time marching。**
+## 原本的做法有甚麼困難
 
-## 核心做法
+**擴散（diffusion）**是熱量或某些物質逐漸向周圍散開的現象。例如金屬的一端受熱，熱會逐漸傳到其他位置。
 
-傳統 Walk on Spheres 解 steady-state PDE 時，從 query point 開始，在幾何內反覆建立能容納的最大球，直接隨機跳到球面；因此一次可以跨過很大的空白區域，不必像 grid solver 一格一格走。
+這類變化可以用 **偏微分方程（PDE）**描述：把一個量在不同位置、不同時間如何變化，寫成數學關係。這篇主要處理其中的熱擴散問題，不是所有物理現象。
 
-這篇替每條 random walk 再加入一個 **time budget**。
+傳統計算通常先建立**體積網格**，也就是把三維空間切成許多小塊，再逐步更新每塊的狀態。若空間很大、形狀複雜，或只需要少量位置的答案，建立與更新整張網格就可能浪費不少工作。
 
-假設要查詢位置 `x` 在時間 `T` 的溫度：
+## 它是怎樣做到的
 
-```text
-Query(x, T)
-    ↓
-walker.time = T
-    ↓
-建立 sphere / star
-    ↓
-抽樣這一步穿越區域所需的 exit time τ
-    ↓
-τ < 剩餘時間？
-   ├─ 是 → 跳到下一個空間位置
-   │        time -= τ
-   │        累積 source / boundary contribution
-   │        繼續 walk
-   │
-   └─ 否 → walker 在目標時間之前仍留在這個區域
-            抽樣 interior point
-            查詢 initial condition
-            結束
-```
+方法使用 **蒙地卡羅估計（Monte Carlo）**：重複做許多次隨機抽樣，再把結果合起來估算答案。單次結果可能偏高或偏低，所以通常要多次抽樣。
 
-因此 random walk 同時在「空間」與「剩餘時間」中向後追蹤 diffusion 的來源。
+其中的 **Walk on Spheres（球面隨機遊走，WoS）**，可以先理解成一種跳躍式查詢：
 
-對純 Dirichlet boundary，作者擴展 Walk on Spheres；對混合 Dirichlet–Neumann boundary，則擴展 Walk on Stars。技術重點還包括 exit-time kernel 的抽樣、低偏差且不需要大型 lookup table 的 exit-time sampler、rejection sampling，以及 variance reduction。
+1. 從想知道溫度的位置出發。
+2. 在周圍找出一個不穿過邊界的球形區域。
+3. 利用這種簡單形狀的已知數學性質，抽樣決定下一步往哪裡走，不必逐小格前進。
+4. 同時抽樣這一步對應多少擴散時間，從剩餘時間中扣除。
+5. 路徑遇到邊界，或時間追溯到起始時刻時，取得對應的溫度等資料。
+6. 重複許多條路徑，把沿途熱源、邊界和起始狀態的貢獻合起來估計溫度。
 
-作者亦提出共享 random walks 的方式，讓多個 target times 不必完全獨立重算。
+這些路徑是計算工具，**不代表真的追蹤一顆熱粒子走過的路**。
 
-## 與現有方法的差別
+若某次抽到的離開時間比剩餘時間還長，就改為在區域內抽樣起始狀態，而不是繼續跳到球面。這讓方法能處理「熱還在變化中」的情況，不只計算最後穩定下來的溫度。
 
-傳統 transient grid / FEM solver 的思維是：
+作者亦擴展了 **Walk on Stars（WoSt）**，使方法能處理更多邊界限制；並研究如何重用路徑，避免查詢多個時間時每次都完全重算。
 
-```text
-整個世界狀態(t)
-        ↓
-更新整個世界狀態(t + Δt)
-```
+## 與原本做法有甚麼差別
 
-這篇則比較像：
+| 問題 | 逐格、逐時更新 | 這篇的抽樣查詢 |
+| --- | --- | --- |
+| 計算從哪裡開始 | 從起始狀態往後更新 | 從想知道的位置和時間開始估計 |
+| 是否先建立體積網格 | 這類傳統方法通常需要 | 不需要，但仍需物體邊界及相關幾何查詢 |
+| 只需要少量位置時 | 可能計算大量用不到的資料 | 可把計算集中在查詢位置 |
+| 整個空間都需要精細答案時 | 規則網格可能很有效率 | 大量抽樣可能變得昂貴 |
 
-```text
-「我現在只想知道這個位置在 8.3 秒時是多少？」
-        ↓
-直接 Monte Carlo Query(x, 8.3)
-```
-
-所以它把 diffusion 從一個必須持續維護的 **global simulation state**，部分轉成一個可以按需要求值的 **queryable field**。
-
-這個差異對遊戲引擎很重要：如果 gameplay / AI / renderer 每一幀只需要少量 sample，output-sensitive solver 有機會避免為整個巨大世界維護高解析度 voxel field。
-
-與原有 grid-free WoS / WoSt 相比，新內容則是把 steady-state 解法真正帶到 transient heat equation，包括 initial condition、time-dependent source，以及 time-dependent boundary data，同時避免 time-step selection 與 temporal discretization bias。
+它仍然需要知道物體的形狀、初始溫度、熱源，以及邊界如何交換熱量。不是只給一個座標就能憑空得到正確答案。
 
 ## 實驗結果與限制
 
-作者展示方法可以在複雜幾何上直接估計不同時間的 diffusion solution，並與傳統數值解比較。方法保留 Monte Carlo solver 的幾個特性：
+作者展示在複雜幾何上估計不同時間的擴散結果，並與傳統數值解比較。這份筆記不把結果整理成固定的加速倍數，因為成本會隨查詢數量、形狀和精度要求而改變。
 
-- 不需要 volumetric mesh；
-- query 彼此高度平行；
-- progressive：增加 samples 可逐步降低 noise；
-- output-sensitive：成本主要花在真正要求值的位置；
-- 不需要選擇 Δt，因此沒有一般 time marching 的 temporal discretization bias。
+主要特性包括：
 
-但這不是「免費的 realtime heat simulation」。Monte Carlo estimator 會有 variance；要求非常低噪聲或同時查詢整個 dense 3D field 時，sample 數量仍可能很大。若遊戲每幀真的需要更新數百萬 voxel，傳統 GPU grid solver 反而可能更合適。
+- 不必建立體積網格，也不用固定每隔多少秒更新一次。
+- 不同位置可以分開計算，適合安排同時計算。
+- 增加抽樣次數，通常能降低答案的隨機波動。
+- 可以把計算資源集中在真正需要答案的位置。
 
-另外，這篇目前是 arXiv 研究工作；不能把它直接當成已有 production evidence 的遊戲引擎方案。
+它不是沒有誤差的即時熱模擬。蒙地卡羅估計會有**統計噪聲**，也就是抽樣不同，結果會稍有不同。若每幀都要更新數百萬個位置，或要求極小誤差，傳統網格方法可能更合適。
 
-## 對遊戲開發的用途
+省去固定時間步進，也不等於省去所有數值近似。論文仍是研究方法，這份筆記沒有商用遊戲採用的證據。
 
-最值得注意的不是單純「熱傳導更準」，而是它提供另一種 **world-field representation / execution model**：世界中的 diffusion 不一定要永久存在一張 dense voxel texture 裡，也可以在需要時直接 query。
+## 可以怎樣用在遊戲裡
 
-例如大型機甲遊戲可以把裝甲或場景中的熱源表示為 boundary / source data：
+以下是延伸構想：機甲裝甲某處被加熱後，只有感測器、角色或玩法邏輯需要讀取溫度的位置才求值。
 
-```text
-雷射命中
-  ↓
-建立 time-dependent heat source
-  ↓
-玩家熱感應器 Query(x, t)
-AI Query(x, t)
-材質系統 Query(x, t)
-  ↓
-只有真正需要的地方才求值
-```
+例如熱感應器只查詢視線中的少量位置，就可能不必一直維護整個巨大場景的精細溫度格子。不過熱源歷史、物體邊界和材料條件仍需記錄。
 
-同一個思想也可能延伸到符合 diffusion PDE 的其他場，例如污染、煙霧濃度的低頻近似、腐蝕／濕度傳播、某些 gameplay energy field 等。不過這些是否符合 diffusion model 必須逐項判斷，不能把所有 propagation 都硬套成 heat equation。
+污染物濃度、濕度等系統也可能使用類似思路，但要先確認它們是否符合這種擴散模型。**煙被風吹走、聲波傳播和燃燒反應，不能只因為都會「傳播」就直接套用熱擴散。**
 
-它尤其適合「巨大世界，但只有玩家附近／感測器附近需要高精度結果」的系統。這與固定建立整張 3D texture 的思路很不一樣。
+## 想實作時再看
 
-## 最小 Prototype
+可以先在平面區域試作：
 
-第一版不需要碰複雜 3D mesh，可以先做 2D domain：
+1. 讓左邊界逐漸升溫，其他條件固定。
+2. 實作查詢介面 `QueryTemperature(position, time, samples)`，其中 `samples` 是抽樣次數。
+3. 依論文方法估計幾個位置的溫度。
+4. 用逐格更新的簡單方法作比較，檢查誤差和時間成本。
+5. 特別比較「只查 100 個位置」與「查整張圖」的差別。
 
-1. 建一個有障礙物的 2D 區域。
-2. 左側 boundary 設為隨時間升溫的 Dirichlet condition。
-3. 實作最基本的 transient Walk on Spheres。
-4. 提供 `float QueryTemperature(Vec2 p, float t, int samples)`。
-5. 與 512×512 finite-difference grid + small timestep 的 reference 比較。
-6. 特別量測「只查 100 個 gameplay points」時，兩種方法真正計算了多少資料。
+閱讀論文時會遇到幾個詞：
 
-如果這一步成立，再測大型稀疏 3D 場景；那時才比較容易判斷它是否值得變成 engine subsystem。
-
-建議先讀論文中 transient WoS / WoSt 的 estimator 推導，再讀 exit-time sampling 與 variance reduction 部分。真正決定實作是否實用的不是 WoS 這個名稱，而是 exit-time kernel 怎樣可靠而便宜地抽樣。
+| 名詞 | 在這裡的意思 |
+| --- | --- |
+| Dirichlet 邊界條件 | 指定邊界的溫度，例如邊緣維持 100 度 |
+| Neumann 邊界條件 | 指定穿過邊界的熱流或對應的法向變化率，例如隔熱邊界沒有熱流通過 |
+| Exit time | 一條隨機路徑離開當前區域所需的時間 |
+| Rejection sampling（拒絕抽樣） | 先抽候選值，再按規則接受或捨棄，使留下來的值符合所需分布 |
+| Variance reduction（變異數降低） | 改善抽樣方式，減少相同計算量下結果的隨機波動 |
 
 ## 個人筆記
 
-這篇最有意思的地方是把「隨時間演化的場」從傳統的 **state update problem** 改寫成某種 **space-time query problem**。
-
-對遊戲而言，這可能形成一個很有特色的 engine primitive：
-
-```cpp
-float QueryField(Vec3 position, double time);
-```
-
-世界不一定每幀把所有地方的熱都算好；只有角色、AI、sensor、renderer 或 gameplay rule 真正需要知道某處狀態時才估計。
-
-技術成熟度：**研究原型 / 方法可實作，暫無 production evidence**。
-
-技術密度：**很高**。
-
-預估閱讀時間：**60–90 分鐘**。
+值得留下的思路是：**有些世界狀態可以在需要時估算，不一定要每一幀把所有地方都更新一遍。**適不適合，取決於你要查多少位置，以及能容許多少誤差。

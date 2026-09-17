@@ -18,112 +18,93 @@ tags:
   - procedural-geometry
   - physical-simulation
   - real-time
-summary: "從多視角影像把毛髮、纖維與絨毛等模糊幾何重建成大量明確的 line segments，而不是 3D Gaussian 或其他半透明體積 primitive；因此重建結果可直接進入標準 rasterization、shading 與物理模擬流程。"
+one_liner: "把不同角度拍到的毛髮或纖維照片，還原成由許多細線組成的三維模型。"
+summary: "電腦反覆調整細線的位置和顏色，直到畫出來的影像接近照片；得到的是明確的線段資料，之後較容易接到一般繪圖或物理處理流程。"
 ---
 
 # Inverse Rendering for Modeling with Line Primitives
 
-## 解決甚麼問題
+## 先用一個例子理解
 
-毛髮、絨毛、纖維、細草等結構很難用普通 surface mesh 重建。近年的 radiance field / 3D Gaussian 類方法能從照片得到很好的視覺效果，但結果通常是半透明的 volumetric primitives：它們很適合重新渲染，卻不是遊戲引擎熟悉的明確幾何，因此較難直接拿去做 depth-tested rasterization、一般材質模型、碰撞或物理模擬。
+假設你從不同角度拍了一顆毛球，想把它放進遊戲。你需要的不只是一張看起來很像毛球的圖片，還希望得到能從不同角度畫出來的三維資料。
 
-這篇工作的目標不是再做一種更好的 volumetric appearance representation，而是直接把這些 fuzzy objects 重建成大量真正的 line segments。換言之，輸出不是「看起來像毛」，而是可以被視為一束束明確纖維的幾何資料。
+這篇研究讓電腦用大量細線去重建毛球。每條線有明確的位置和顏色，電腦不斷調整它們，讓畫出的結果接近照片。
 
-## 核心做法
+**這些線段是照片所支持的一種重建結果，不等於每條都準確對應真實世界中的某根毛髮。**
 
-最直接的想法是：用大量一像素寬的線段去擬合多視角照片。但 inverse rendering 需要從影像誤差反向得到「哪條線應該移去哪裡、顏色怎樣改、甚至連接關係怎樣改」的 gradient；普通 rasterizer 的 visibility 與離散 pixel coverage 並不適合直接微分。
+## 原本的做法有甚麼困難
 
-作者因此建立 stochastic differentiable rasterizer。Forward pass 仍然很接近傳統圖形管線：
+一般三維模型常用**三角網格（surface mesh）**：把許多小三角形連成物體表面。它適合表示牆壁、車殼等連續表面，但用來表示大量細小、彼此分離的毛髮，會變得很繁重。
 
-1. 把 line segments 以 Bresenham 類 rasterization 畫到 2x subpixel grid。
-2. 使用 screen-space filtering / MSAA，讓大量極細的 opaque lines 在像素尺度形成近似半透明 fuzzy appearance。
-3. visibility 使用 stochastic opacity masking；不是把每條線真正改成 volumetric translucent blob。
-4. backward pass 使用 score-function gradient estimator，估計 line vertex position、attribute 與離散 connectivity 對最終影像 loss 的影響。
-5. 對 MSAA 下多個 fragment 的聯合機率，作者用 independence approximation 將問題 factorize，並在 filter weight 最大的 pixel 評估 opacity gradient，使整個最佳化仍可計算。
+另一類方法著重還原外觀。例如 **3D Gaussian Splatting**，可以把場景表示成許多帶有顏色和透明程度、向周圍柔和散開的小團塊；**輻射場（radiance field）**則描述不同位置、不同觀看方向上的光和外觀資訊。
 
-因此資料流大致是：
+這些方式可以重現細毛的外觀，但其中的小團塊或光學資料，不會自動等於一根可以彎曲或剪斷的纖維。
 
-```text
-Multi-view photos
-      ↓
-coarse initialization
-      ↓
-explicit line segments
-      ↓
-stochastic differentiable rasterization
-      ↓
-image-space reconstruction loss
-      ↓
-gradients for position / attributes / connectivity
-      ↓
-optimized explicit fiber geometry
-```
+這篇選用**線段基本單元（line primitives）**：以有兩個端點的短線作為模型的基本材料。
 
-最終 runtime 不需要 neural renderer。公開 viewer 可以直接把最佳化後的 lines rasterize；大幅放大時也可改用 camera-facing quad sprites，為每條 line 給 world-space radius。
+## 它是怎樣做到的
 
-## 與現有方法的差別
+整個流程可以先理解成六步：
 
-### Surface mesh
+1. 準備不同角度的照片。
+2. 建立一批初步線段。
+3. 從與照片對應的角度，把線段畫成圖片。
+4. 比較圖片與照片在哪裡不同。
+5. 根據差異，調整線段位置、顏色等資料，甚至調整哪些點互相連接。
+6. 重複這個過程，逐步改善重建結果。
 
-普通 triangle surface 很難有效表示大量比 pixel 更細、彼此分離的纖維；增加 tessellation 又會產生大量不必要的 surface connectivity。
+這叫做**逆向渲染（inverse rendering）**。「渲染」是把三維資料畫成圖片；逆向渲染則利用圖片，反過來推算能產生類似影像的三維資料。
 
-### 3D Gaussian / radiance field
+難處是：一條極細的線稍微移動，就可能突然遮住或離開某個像素。這會讓電腦難以判斷「再往哪個方向改一點，誤差會更小」。
 
-Gaussian 類方法用半透明 volumetric primitive 很容易重現 fuzzy silhouette，但輸出主要是 appearance representation。要把「這裡有毛」轉回可碰撞、可彎曲、可受風力或可被剪斷的 fiber geometry，仍需要另一層 reconstruction。
+作者因此設計了帶有隨機抽樣的**可微分渲染器**。這裡的「可微分」可理解為：除了畫圖，還能估計模型參數改變時，圖片誤差會怎樣改變，從而指引下一次調整。
 
-這篇直接選擇 line segment 作為 representation：
+畫線時，方法會在像素內做更細的取樣，再合成最後顏色。因此許多不透明的細線，仍能在畫面上形成蓬鬆、若隱若現的邊緣。**MSAA（多重取樣反鋸齒）**就是在像素內檢查多個位置，讓邊緣不至於因一次取樣而忽明忽暗的做法。
 
-```text
-照片
- ↓
-不是：照片 → volumetric appearance → 再猜 geometry
-而是：照片 → explicit line geometry
-```
+## 與其他表示方式有甚麼差別
 
-因此它最大的 engine 意義不是 image quality，而是 reconstruction output 與 runtime representation 可以是同一種東西。
+| 模型形式 | 主要儲存甚麼 | 對後續用途的影響 |
+| --- | --- | --- |
+| 三角網格 | 由三角形連起來的表面 | 適合連續表面，表示大量獨立細毛可能很繁重 |
+| 半透明小團塊等外觀表示 | 顏色、透明程度和空間分布 | 能重現外觀，但不直接提供每根纖維的結構 |
+| 這篇的線段模型 | 端點、顏色及線段連接關係 | 更容易把同一份資料交給畫線或纖維處理程式 |
+
+最值得注意的是輸出資料的形式：它本身就是幾何線段，不必先從外觀表示再猜一次線段在哪裡。
 
 ## 實驗結果與限制
 
-作者在 synthetic 與 real-world fuzzy datasets 上測試，包含毛髮、毛皮、植物纖維與 textile-like structures。論文報告 line representation 在 fuzzy boundaries 上優於 surface-based reconstruction，並能達到與 volumetric representation 相近的視覺品質，同時保留 explicit geometry。
+作者在人工生成及真實拍攝的資料上測試，包括毛髮、毛皮、植物纖維和類似紡織物的結構。論文報告，線段表示對蓬鬆邊緣的重建優於所比較的表面方法，並能接近體積外觀表示的視覺品質。
 
-官方 implementation 已完整公開，包含訓練 scripts、Fuzzy Dataset、Shelly Dataset 實驗、released checkpoints、interactive viewer、Web viewer 與 rendering benchmark script。作者指出 differentiable renderer 因 atomic reductions 與 PyTorch seeding 並非 bit-deterministic，但重跑時各 scene 的數值波動只出現在最後顯示位，平均分數四捨五入後可重現 paper 數字。
+官方專案提供程式碼、資料集、已重建的模型、互動檢視器和效能測量腳本。各種方法的品質、記憶體與速度，仍需在相同場景、資料量、反鋸齒方式和硬體下比較，不能只抽一個每秒畫面數來下結論。
 
 限制包括：
 
-- reconstruction 本身仍是離線 optimization，不是遊戲 runtime 每幀執行的演算法；
-- line-only representation 適合纖維狀物體，不代表所有 fuzzy volume 都應改成 lines；
-- 一像素 Bresenham lines 在近距離大幅放大時會暴露 primitive structure，因此 runtime viewer 另提供 quad-sprite 模式；
-- optimization pipeline 目前依賴 PyTorch、Vulkan，訓練通常還需要 NVIDIA CUDA；
-- explicit geometry 雖然方便物理模擬，但 paper 本身沒有展示完整的動態 hair / cloth simulation pipeline，因此「重建後直接拿去做 gameplay physics」仍是可轉移的工程方向，而非已驗證 production feature。
+- 從照片重建模型仍是**離線最佳化**，也就是先花時間反覆調整、完成模型後再使用，不是遊戲每幀都重新做一次。
+- 線段適合細長的結構，不代表所有蓬鬆物體都能用同樣方式處理。
+- 大幅放大時，極細線段可能顯得太薄或暴露其形狀；官方檢視器亦提供以面向鏡頭的小矩形來表現線寬的方式。
+- 重建程式依賴 PyTorch（數值計算與機器學習工具）和 Vulkan（與 GPU 溝通的繪圖介面），訓練通常亦需要 NVIDIA CUDA 的 GPU 計算支援。
+- 論文並沒有展示完整的動態毛髮、碰撞和剪斷系統。得到線段只是較方便繼續處理，不表示這些功能已經完成。
 
-不同 representation 的 quality、memory 與 runtime benchmark 受 scene、primitive count、anti-aliasing mode 與硬體影響，不應只抽一個 FPS 數字與 3D Gaussian 系統直接比較。
+作者亦說明，重新執行時可能有微小數值差異，不能保證每次逐位元完全相同。
 
-## 對遊戲開發的用途
+## 可以怎樣用在遊戲裡
 
-這篇最值得注意的是一種 representation 思路：**對具有明確細長拓撲的 fuzzy object，不一定要把它視作半透明 volume；可以直接把最小 runtime primitive 定義成 fiber / segment。**
+以下是延伸構想：讓草或毛髮的視覺與互動，共用同一批線段。
 
-這可以形成一套 Fiber Geometry System：
+例如一株草由幾段相連的短線表示。畫面依這些線的位置顯示草葉，風吹時更新線的位置；若之後實作了刀刃相交檢查和斷裂規則，也可以修改它們的連接關係。
 
-```text
-Fiber / grass / fur capture
-        ↓
-explicit segments
-        ├─ rasterization
-        ├─ wind / bending
-        ├─ collision
-        ├─ cutting / burning
-        └─ gameplay queries
-```
+這樣值得研究的地方，是畫面和玩法能否共用同一份「草在哪裡」的資料。風、碰撞、燃燒或剪斷仍需各自實作，而且大量線段也可能需要簡化，不能全部逐一做昂貴的物理計算。
 
-例如遊戲中的長草，如果視覺、碰撞、風力、燃燒傳播與斬草全部共享同一批 line / polyline primitives，就不必維護「render grass」與「gameplay grass」兩個完全不同的世界表示。毛皮也可以把 visual fiber 與 grooming / deformation 的控制結構連起來。
+## 想實作時再看
 
-更有意思的是 destruction：line primitive 天然有離散 connectivity，切斷一條 fiber、改變兩段的連接關係，比在 volumetric Gaussian field 中定義「這根毛被剪斷」直接得多。這正是 explicit representation 可能塑造 interaction 的地方。
+可以先用作者提供的重建模型，不必第一步就重做照片重建：
 
-它也適合作為 procedural / scanned asset pipeline：先用多視角照片取得複雜纖維幾何，再把結果轉成 engine 自己的 compact polyline、strand cluster、meshlet-like fiber cluster 或 physics guide representation，而不是手工重建。
+1. 匯入線段端點及顏色，先畫出靜態模型。
+2. 將附近的線段分組，跳過畫面看不到的部分。這就是**剔除（culling）**：避免處理不會顯示的資料。
+3. 只選少量代表性纖維計算彎曲，再讓附近細線跟隨，降低計算量。
+4. 最後才嘗試切斷某條線，檢查畫面與物理資料是否能同步改變。
 
-## 最小 Prototype
-
-不需要先重做 inverse renderer。可以直接下載作者 released checkpoints，把 line models 轉成自己的 C++ runtime format：
+簡化後的資料可能像這樣；`Vec3` 表示三個數值組成的位置或顏色，以下只是結構示意：
 
 ```cpp
 struct FiberVertex {
@@ -132,27 +113,25 @@ struct FiberVertex {
 };
 
 struct FiberSegment {
-    uint32_t a;
-    uint32_t b;
+    uint32_t a; // 第一個端點在陣列中的編號
+    uint32_t b; // 第二個端點在陣列中的編號
 };
 ```
 
-第一版只做三件事：
+進一步閱讀渲染器時，會遇到：
 
-1. GPU instanced / indirect line 或 camera-facing ribbon rendering。
-2. 把相鄰 segments cluster 成 polyline，測試 spatial partition / culling。
-3. 選少量 guide fibers 加簡單 Verlet / PBD bending，再讓附近 visual fibers 跟隨。
+| 名詞 | 在這裡的意思 |
+| --- | --- |
+| Rasterization（光柵化） | 判斷三維線段或三角形覆蓋哪些像素，再畫到螢幕上 |
+| Stochastic opacity masking | 用隨機取樣決定哪些覆蓋樣本保留，以估計影像及其變化 |
+| Gradient（梯度） | 描述參數稍微改變時，誤差往哪個方向增加或減少的資訊 |
+| Score-function gradient estimator | 用抽樣機率的變化，估計難以直接求出的梯度 |
+| Connectivity（連接關係） | 哪兩個端點組成線段、哪些線段彼此相接 |
 
-接著再測試「切斷 connectivity」：ray / blade 命中 segment 後斷開 graph，看看 rendering、physics 與 gameplay state 是否能共用同一 representation。這比一開始重現完整 differentiable optimization 更能快速驗證它對遊戲引擎的價值。
-
-若要理解論文本身，優先讀 Technical Overview 中 stochastic opacity masking 如何擴展到 MSAA，以及 discrete connectivity optimization；若要實作，先看官方 `inverse-line-primitives` 的 training scripts，再看獨立公開的 `fuzzydr` Vulkan differentiable rasterizer。
+作者對多個取樣點的聯合機率採用獨立性近似，並選擇合適的像素評估透明程度的梯度，以降低計算負擔。若要重現演算法，需要回到論文公式；上面的白話流程只說明它為何這樣設計。
 
 ## 個人筆記
 
-技術成熟度：**可實作研究原型**。官方 MIT source、datasets、checkpoints、viewer 與 benchmark scripts 已公開，但目前沒有 production game adoption 證據。
+這是可嘗試實作的研究原型，這份筆記沒有商用遊戲採用的證據。
 
-技術密度：**高**。
-
-預估閱讀時間：**50–75 分鐘**；若連 FuzzyDR implementation 一起追，約 2 小時以上。
-
-真正值得留下的不是「用線重建毛髮」這個表面結果，而是：**如果某種世界內容天然具有一維拓撲，就應該考慮讓 reconstruction、rendering、physics 與 gameplay 都共享一維 explicit primitive，而不是先把它膨脹成容易渲染、卻難以互動的 volume。**
+值得記住的是：**如果最後需要操作一根根纖維，就可以考慮從重建開始便使用線段資料，讓後續畫面和互動更容易銜接。**
