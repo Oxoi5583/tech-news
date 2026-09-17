@@ -1,6 +1,7 @@
 # Tech News
 
-以 Markdown 收錄新技術論文，記錄核心做法、實驗限制，以及對遊戲開發的實際用途。
+以 Markdown 收錄技術論文與深度文章，記錄值得理解的方法、觀點與問題。
+深度文章可以是技術解析、遊戲設計、文化評論、社會分析或哲學討論，不限於學術論文。
 執行根目錄的 `build.py`，即可產生靜態 HTML 網站。
 
 ## 快速開始
@@ -12,7 +13,8 @@ python -m pip install -r requirements.txt
 python build.py
 ```
 
-開啟 `site/index.html` 即可閱讀。沒有文章時也能正常生成首頁和分類頁。
+預設同時讀取 `papers/` 和 `articles/`，開啟 `site/index.html` 即可閱讀全部收錄。
+也可從導覽選擇「技術論文」「深度文章」、主題分類或標籤。沒有文章時仍可正常生成。
 網站不需要後端、資料庫、Node.js 或外部 CDN。
 
 也可以透過本機 HTTP 伺服器預覽：
@@ -30,6 +32,7 @@ python -m http.server 8000 --directory site
 | `build.py` | 網站生成腳本 |
 | `requirements.txt` | Markdown 及 YAML 解析依賴 |
 | `templates/paper.md` | 新論文範本，不參與預設的網站生成 |
+| `templates/article.md` | 深度文章整理範本，不要求實驗數據或遊戲應用 |
 | `web/page.html` | 所有頁面共用的 HTML 版型 |
 | `web/style.css` | 網站樣式，支援窄螢幕及系統深淺色偏好 |
 | `papers/rendering/` | 渲染、光照、材質、幾何表示 |
@@ -37,24 +40,36 @@ python -m http.server 8000 --directory site
 | `papers/animation/` | 動畫、IK、動作生成 |
 | `papers/ai/` | 遊戲 AI、機器學習、LLM |
 | `papers/systems/` | 記憶體、平行運算、資料結構、引擎架構 |
+| `articles/technology/` | 科技觀察、技術解析、產業深度文章 |
+| `articles/game-design/` | 遊戲設計與開發經驗 |
+| `articles/culture/` | 文化、作品評論與創作討論 |
+| `articles/society/` | 社會、政治、歷史等分析 |
+| `articles/philosophy/` | 哲學、思想與概念討論 |
 | `site/` | 生成結果，已被 Git 忽略 |
 
-每篇論文建議使用 `papers/<主題>/<發表年份>/<英文短名>/index.md`。
+論文使用 `papers/<主題>/<發表年份>/<英文短名>/index.md`；
+深度文章使用 `articles/<主題>/<發表年份>/<英文短名>/index.md`。
+深度文章的原始發表日期不詳時，年份資料夾可用 `undated`，metadata 的 `published` 留空。
 例如以下路徑僅示範命名，不代表已收錄真實論文：
 
 ```text
 papers/rendering/2026/example-paper/index.md
 papers/rendering/2026/example-paper/assets/overview.png
+articles/culture/2026/example-essay/index.md
+articles/culture/2026/example-essay/assets/illustration.png
 ```
 
-同一篇論文只存一份，放在最相關的主題中；跨領域關係用 `tags` 表示。
-可自行新增主題資料夾，腳本會自動產生分類頁。`tags`、`_static` 為保留分類名稱。
+同一篇內容只存一份，放在最相關的主題中；跨領域關係用 `tags` 表示。
+**內容類型與主題分開**：一篇渲染技術解析可以是 `article`，一篇遊戲設計研究可以是 `paper`。
+兩個來源中的同名主題會合併到同一分類頁，標籤也共用。
+例如可同時有 `papers/game-design/` 與 `articles/game-design/`。
+可自行新增主題資料夾，腳本會自動產生分類頁。`tags`、`types`、`_static` 為保留分類名稱。
 `.gitkeep` 只用來讓 Git 保存尚未收錄文章的分類。
 
-## 新增論文
+## 新增內容
 
-1. 建立主題、年份和論文資料夾。
-2. 複製 `templates/paper.md` 至該資料夾，改名為 `index.md`。
+1. 選擇 `papers/` 或 `articles/`，建立主題、年份和文章資料夾。
+2. 複製相應的 `templates/paper.md` 或 `templates/article.md`，改名為 `index.md`。
 3. 填寫 metadata 及正文，刪除尚未填寫的提示文字。
 4. 圖片放在同層的 `assets/`，使用相對路徑引用。
 5. 執行 `python build.py`。
@@ -64,35 +79,44 @@ PowerShell 範例：
 ```powershell
 New-Item -ItemType Directory -Force papers/rendering/2026/example-paper
 Copy-Item templates/paper.md papers/rendering/2026/example-paper/index.md
+
+New-Item -ItemType Directory -Force articles/culture/2026/example-essay
+Copy-Item templates/article.md articles/culture/2026/example-essay/index.md
 ```
 
 ### Metadata
 
 | 欄位 | 格式與用途 |
 | --- | --- |
-| `title` | 必填：完整論文標題 |
-| `published` | 必填：發表日期，`YYYY-MM-DD` |
+| `type` | `paper`（技術論文）或 `article`（深度文章）。新內容請明確填寫；舊文省略時，來源根目錄名為 `articles` 則視為深度文章，其他來源視為論文 |
+| `title` | 必填：原文標題或這份整理的標題 |
+| `published` | 原始發表日期，`YYYY-MM-DD`。論文必填；深度文章不詳時可省略或填 `""`，網站顯示「日期未詳」 |
 | `added` | 必填：本站收錄日期，`YYYY-MM-DD`；首頁主要排序依據 |
-| `one_liner` | 新文章應填：一句最簡單的用途說明；顯示於列表卡片及文章開頭的「一句話用途」。舊文省略時暫用 `summary`，但不會自動將術語改成白話 |
-| `summary` | 必填：一兩句白話補充做法及適用範圍，顯示於用途下方並用作網頁描述 |
+| `one_liner` | 新文章應填：一句最簡單的用途或重點；論文顯示「一句話用途」，深度文章顯示「一句話重點」。舊文省略時暫用 `summary`，不會自動白話改寫 |
+| `summary` | 必填：一兩句白話補充方法或核心觀點，顯示於一句話下方並用作網頁描述 |
 | `authors` | 作者字串清單；可省略或填 `[]` |
-| `venue` | 會議、期刊或預印本平台；可省略或留空 |
-| `paper_url` | 原始論文的完整 HTTP(S) URL；可省略或留空 |
+| `venue` | 出處：會議、期刊、媒體、網站或部落格名稱；可省略或留空 |
+| `source_url` | 原文的完整 HTTP(S) URL，兩種類型皆可使用；可省略或留空。多來源整理可留空並在正文逐一列出 |
+| `paper_url` | 保留舊論文格式；未填 `source_url` 時使用此連結，兩者都有時以 `source_url` 為準 |
 | `code_url` | 程式碼的完整 HTTP(S) URL；可省略或留空 |
 | `tags` | 標籤字串清單；可省略或填 `[]` |
 
-### 寫作方式：先看得懂用途，再理解方法
+### 寫作方式：先看懂用途或觀點，再深入理解
 
-以下規則也適用於自動收錄、整理論文的工作：
+以下規則也適用於自動收錄、整理內容的工作。分類與格式擴充不會自動改變排程的搜尋範圍：
 
-- `one_liner` 只回答「這項技術用來做甚麼」，一句話、一個主要用途，避免縮寫及未解釋的術語。
-- 例如：`不用逐粒模擬沙子，也能估算機器人踩進沙地時會受到多大阻力。`
-- `summary` 補充簡單做法和範圍，不要壓縮整篇論文的所有技術重點。
-- 正文先給具體例子，再依序說明原本的困難、資料如何處理、得到甚麼結果。
+- 論文的 `one_liner` 回答「這項技術用來做甚麼」，例如：`不用逐粒模擬沙子，也能估算機器人踩進沙地時會受到多大阻力。`
+- 深度文章的 `one_liner` 回答「作者提出甚麼值得理解的看法」，例如：`作者認為，遊戲中的等待也能讓玩家感受到旅途的距離。` 此句只是寫法示例，不代表已收錄文章。
+- 一句話避免縮寫及未解釋的術語；可以說明一個主要重點，正文仍要保留原文多個觀點之間的關係。
+- `summary` 補充簡單做法、觀點或適用範圍，不要壓縮整篇原文的所有內容。
+- 論文先給具體例子，再說明原本的困難、資料如何處理、得到甚麼結果；深度文章先交代問題與背景，再整理作者的推理和依據。
 - 專有名詞首次出現時就解釋，例如「力矩（讓物體轉動的作用）」；只展開英文縮寫並不算解釋。
-- 優先使用容易理解的中文，英文名稱供查找即可。技術細節放在後面的「想實作時再看」，不要用術語解釋另一個術語。
+- 優先使用容易理解的中文，英文名稱供查找即可。較深入的細節後置，不要用術語解釋另一個術語。
 - 實驗數字保留條件和比較對象；區分論文已展示的成果與遊戲應用構想，不為了簡化而誇大能力。
-- 首頁、分類頁、標籤頁和文章開頭都會顯示「一句話用途」，由同一個欄位提供內容。
+- 深度文章分清原文事實、作者解讀、價值判斷及整理者的延伸；個人筆記不要冒充原作者的主張。
+- 依原文特性增刪章節，評論不需要硬填「實驗結果」「如何實作」或「遊戲用途」，也不必為了平衡而刻意反駁。
+- 用自己的話整理並保留原文連結；引用明確標示，多來源整理在相應段落說明來源。
+- 首頁、內容類型頁、主題分類頁、標籤頁和文章開頭共用 `one_liner`，依類型顯示對應標籤。
 
 標籤建議使用 `spatial-partitioning`、`real-time` 等小寫英文。
 中文標籤也可以使用；腳本會為它產生穩定的雜湊網址，頁面仍顯示原標籤。
@@ -123,18 +147,29 @@ Markdown 允許原始 HTML，請只生成你信任的筆記；這不是 HTML 清
 ## 指定來源及輸出路徑
 
 ```bash
-python build.py --source "./papers" --output "./site"
+# 預設合併論文與深度文章
+python build.py --output "./site"
+
+# 自訂多個來源：每個目錄各使用一次 --source
+python build.py --source "./papers" --source "./articles" --output "./site"
+
+# 只生成論文，可使用另一個輸出目錄
+python build.py --source "./papers" --output "./papers-site"
 ```
 
 Windows 範例：
 
 ```powershell
-python build.py --source "./papers" --output "E:/Websites/tech-news"
+python build.py --output "E:/Websites/tech-news"
 ```
 
-省略參數時，路徑以 `build.py` 所在目錄為準。
+省略 `--source` 時，會讀取 `build.py` 旁的 `papers/` 和 `articles/`；預設輸出仍是旁邊的 `site/`。
 明確傳入的相對路徑以目前工作目錄為準，支援包含空白的路徑。
 自訂來源也要保留 `<主題>/.../*.md` 結構。
+`--source` 指定的是這一次建置的完整來源清單。若只選一個來源並輸出至舊網站目錄，
+其他來源上次生成的頁面會依 manifest 清除；要保留兩種類型，請用預設來源或明確指定兩個來源。
+
+既有 `rebuild.sh` 已調整為同時生成兩類內容，輸出位置仍是 `/var/wiki/html/tech_news`。
 
 腳本遞迴讀取來源內所有 `.md`（副檔名大小寫皆可），每份都需要 metadata。
 慣例使用每篇一個 `index.md`，其他名稱也可以，例如 `notes.md` 會變成 `notes.html`。
@@ -144,16 +179,23 @@ python build.py --source "./papers" --output "E:/Websites/tech-news"
 | --- | --- |
 | `papers/rendering/2026/example-paper/index.md` | `site/rendering/2026/example-paper/index.html` |
 | `papers/rendering/2026/example-paper/assets/overview.png` | `site/rendering/2026/example-paper/assets/overview.png` |
+| `articles/culture/2026/example-essay/index.md` | `site/culture/2026/example-essay/index.html` |
 | 全部文章 metadata | `site/index.html` |
+| 所有 `paper` 類型 | `site/types/paper/index.html` |
+| 所有 `article` 類型 | `site/types/article/index.html` |
 | `rendering` 分類 | `site/rendering/index.html` |
 | `real-time` 標籤 | `site/tags/real-time/index.html` |
+
+論文的既有檔案與網址維持原樣。兩個來源都映射到相同網站根目錄，
+因此 `<主題>/<年份>/<英文短名>` 必須不重複；同名文章或圖片會報錯，不會互相覆寫。
+兩個來源之間也可用相對 `.md` 連結，腳本會改寫為正確的 HTML 路徑。
 
 輸出使用相對網址及明確的 `index.html`，可直接在瀏覽器開啟，也能部署到 `/tech-news/` 等子路徑。
 部署時複製整個輸出目錄；此 repo 尚未設定自動部署。
 
 ## 重建與檔案保護
 
-- 來源和輸出不能相同，也不能互相包含。
+- 來源和輸出不能相同，也不能互相包含；多個來源之間也不能互相包含。
 - 解析、渲染、Markdown 連結及路徑衝突檢查完成後才開始寫入。
 - 輸出根目錄的 `.tech-news-manifest.json` 記錄本腳本管理的檔案。
 - 再次生成會覆寫受管理的檔案，並刪除已不再使用的受管理檔案，例如被移除文章的 HTML。

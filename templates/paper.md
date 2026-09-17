@@ -1,4 +1,5 @@
 ---
+type: paper
 title: "論文完整標題"
 published: "2026-09-01"
 added: "2026-09-15"

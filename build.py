@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a static paper notebook. Requires Python 3.10+, Markdown and PyYAML."""
+"""Build a static reading notebook. Requires Python 3.10+, Markdown and PyYAML."""
 
 from __future__ import annotations
 
@@ -26,7 +26,11 @@ except ImportError:
 ROOT = Path(__file__).resolve().parent
 MANIFEST = ".tech-news-manifest.json"
 LABELS = {"rendering": "渲染", "simulation": "模擬", "animation": "動畫",
-          "ai": "人工智能", "systems": "系統與引擎架構"}
+          "ai": "人工智能", "systems": "系統與引擎架構", "technology": "科技",
+          "game-design": "遊戲設計", "culture": "文化與創作",
+          "society": "社會", "philosophy": "哲學與思想"}
+TYPES = {"paper": "技術論文", "article": "深度文章"}
+RESERVED = {"tags", "types", "_static"}
 
 
 def relative_url(target: Path, page: Path) -> str:
@@ -39,7 +43,7 @@ def tag_path(tag: str) -> Path:
     return Path("tags") / slug / "index.html"
 
 
-def load_paper(path: Path, source: Path) -> dict:
+def load_entry(path: Path, source: Path) -> dict:
     lines = path.read_text(encoding="utf-8-sig").splitlines()
     if not lines or lines[0].strip() != "---":
         raise ValueError(f"{path}: 缺少 YAML metadata（開頭必須是 ---）")
@@ -52,6 +56,9 @@ def load_paper(path: Path, source: Path) -> dict:
         raise ValueError(f"{path}: YAML 格式錯誤：{exc}") from exc
     if not isinstance(meta, dict):
         raise ValueError(f"{path}: metadata 必須是欄位對照表")
+    kind = meta.setdefault("type", "article" if source.name == "articles" else "paper")
+    if not isinstance(kind, str) or kind not in TYPES:
+        raise ValueError(f"{path}: type 必須是 paper（技術論文）或 article（深度文章）")
     for key in ("title", "summary"):
         if not isinstance(meta.get(key), str) or not meta[key].strip():
             raise ValueError(f"{path}: {key} 必須是非空字串")
@@ -61,6 +68,9 @@ def load_paper(path: Path, source: Path) -> dict:
         raise ValueError(f"{path}: one_liner 必須是非空字串")
     for key in ("published", "added"):
         value = str(meta.get(key, ""))
+        if key == "published" and kind == "article" and not value:
+            meta[key] = ""
+            continue
         try:
             if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
                 raise ValueError()
@@ -72,7 +82,7 @@ def load_paper(path: Path, source: Path) -> dict:
         if not isinstance(value, list) or any(not isinstance(x, str) or not x.strip() for x in value):
             raise ValueError(f"{path}: {key} 必須是非空字串的清單（可以用 [] 留空）")
         meta[key] = list(dict.fromkeys(x.strip() for x in value))
-    for key in ("venue", "paper_url", "code_url"):
+    for key in ("venue", "paper_url", "source_url", "code_url"):
         value = meta.setdefault(key, "")
         if not isinstance(value, str):
             raise ValueError(f"{path}: {key} 必須是字串")
@@ -80,9 +90,11 @@ def load_paper(path: Path, source: Path) -> dict:
             url = urlsplit(value)
             if url.scheme not in ("http", "https") or not url.netloc:
                 raise ValueError(f"{path}: {key} 必須是完整的 HTTP(S) URL")
+    # Existing paper_url fields keep working; new notes can use source_url.
+    meta["source_url"] = meta["source_url"] or meta["paper_url"]
     rel = path.relative_to(source)
-    if len(rel.parts) < 2 or rel.parts[0] in ("tags", "_static"):
-        raise ValueError(f"{path}: 請放在主題資料夾內；tags、_static 為保留名稱")
+    if len(rel.parts) < 2 or rel.parts[0] in RESERVED:
+        raise ValueError(f"{path}: 請放在主題資料夾內；tags、types、_static 為保留名稱")
     return {"meta": meta, "path": path, "output": rel.with_suffix(".html"),
             "category": rel.parts[0], "body": "\n".join(lines[end + 1:])}
 
@@ -135,22 +147,34 @@ class LinkRewriter(HTMLParser):
         self.parts.append(f"<!{decl}>")
 
 
-def build(source: Path, output: Path) -> int:
-    if not source.is_dir():
-        raise ValueError(f"來源目錄不存在：{source}")
-    if source == output or source in output.parents or output in source.parents:
-        raise ValueError("來源和輸出目錄不能相同，也不能互相包含")
+def build(source: Path | list[Path], output: Path) -> int:
+    sources = [source] if isinstance(source, Path) else source
+    sources = list(dict.fromkeys(p.expanduser().resolve() for p in sources))
+    output = output.expanduser().resolve()
+    if not sources:
+        raise ValueError("至少需要一個來源目錄")
+    for src in sources:
+        if not src.is_dir():
+            raise ValueError(f"來源目錄不存在：{src}")
+        if src == output or src in output.parents or output in src.parents:
+            raise ValueError("來源和輸出目錄不能相同，也不能互相包含")
+        if any(other in src.parents for other in sources if other != src):
+            raise ValueError("多個來源目錄不能互相包含")
     if output == ROOT or output in ROOT.parents or ROOT / "web" == output or ROOT / "web" in output.parents:
         raise ValueError("輸出目錄不能覆寫專案或 web 版型目錄")
-    files = sorted(source.rglob("*"))
-    if any(p.is_symlink() for p in files):
+    for protected in (ROOT / "papers", ROOT / "articles", ROOT / "templates"):
+        if output == protected or protected in output.parents:
+            raise ValueError(f"輸出目錄不能寫入內容或範本目錄：{protected}")
+    files = [(p, src) for src in sources for p in sorted(src.rglob("*"))]
+    if any(p.is_symlink() for p, _ in files):
         raise ValueError("來源目錄包含符號連結；請改用實際檔案")
-    papers = [load_paper(p, source) for p in files if p.is_file() and p.suffix.lower() == ".md"]
-    papers.sort(key=lambda p: (p["meta"]["added"], p["meta"]["published"], p["output"].as_posix()), reverse=True)
-    pages = {p["path"]: p["output"] for p in papers}
-    categories = sorted(p.name for p in source.iterdir() if p.is_dir() and not p.name.startswith("."))
-    if any(c in ("tags", "_static") for c in categories):
-        raise ValueError("來源分類不能使用保留名稱 tags 或 _static")
+    entries = [load_entry(p, src) for p, src in files if p.is_file() and p.suffix.lower() == ".md"]
+    entries.sort(key=lambda p: (p["meta"]["added"], p["meta"]["published"], p["output"].as_posix()), reverse=True)
+    pages = {p["path"]: p["output"] for p in entries}
+    categories = sorted({p.name for src in sources for p in src.iterdir()
+                         if p.is_dir() and not p.name.startswith(".")})
+    if any(c in RESERVED for c in categories):
+        raise ValueError("來源分類不能使用保留名稱 tags、types 或 _static")
     template = Template((ROOT / "web/page.html").read_text(encoding="utf-8"))
     generated: dict[Path, bytes] = {}
     generated_names: set[str] = set()
@@ -168,14 +192,19 @@ def build(source: Path, output: Path) -> int:
             f'<a class="tag" href="{relative_url(tag_path(t), page)}">{escape(t)}</a>' for t in tags) + "</div>"
 
     def overview(meta):
-        content = (f'<div class="plain-summary"><span class="summary-label">一句話用途</span>'
+        label = "一句話用途" if meta["type"] == "paper" else "一句話重點"
+        content = (f'<div class="plain-summary"><span class="summary-label">{label}</span>'
                    f'<p>{escape(meta["one_liner"])}</p></div>')
         if meta["summary"] != meta["one_liner"]:
             content += f'<p class="summary-detail">{escape(meta["summary"])}</p>'
         return content
 
     def page(path, title, description, content):
-        nav = '<p><strong>技術分類</strong></p><ul>' + "".join(
+        nav = (f'<p><a href="{relative_url(Path("index.html"), path)}">全部收錄</a></p>'
+               '<p><strong>內容類型</strong></p><ul>' + "".join(
+                   f'<li><a href="{relative_url(Path("types") / kind / "index.html", path)}">{label}</a></li>'
+                   for kind, label in TYPES.items()) + "</ul>")
+        nav += '<p><strong>主題分類</strong></p><ul>' + "".join(
             f'<li><a href="{relative_url(Path(c) / "index.html", path)}">{escape(LABELS.get(c, c))}</a></li>'
             for c in categories) + "</ul>"
         add(path, template.substitute(title=escape(title), description=escape(description, quote=True),
@@ -185,32 +214,39 @@ def build(source: Path, output: Path) -> int:
     def listing(path, title, entries):
         content = f"<h1>{escape(title)}</h1><p class=\"meta\">共 {len(entries)} 篇 · 按收錄日期排序</p>"
         if not entries:
-            content += "<p>尚未收錄論文。</p>"
+            content += "<p>尚未收錄內容。</p>"
         for p in entries:
             m = p["meta"]
             content += (f'<article class="paper-card"><h2><a href="{relative_url(p["output"], path)}">'
-                        f'{escape(m["title"])}</a></h2>{overview(m)}<p class="meta">發表 {m["published"]} · '
+                        f'{escape(m["title"])}</a></h2>{overview(m)}<p class="meta">'
+                        f'<a href="{relative_url(Path("types") / m["type"] / "index.html", path)}">{TYPES[m["type"]]}</a> · '
+                        f'發表 {m["published"] or "日期未詳"} · '
                         f'收錄 {m["added"]} · {escape(LABELS.get(p["category"], p["category"]))}</p>'
                         f'{tags_html(m["tags"], path)}</article>')
-        page(path, title, f"{title}，共 {len(entries)} 篇技術論文筆記。", content)
+        page(path, title, f"{title}，共 {len(entries)} 篇閱讀筆記。", content)
 
-    listing(Path("index.html"), "最新收錄", papers)
+    listing(Path("index.html"), "最新收錄", entries)
+    for kind, label in TYPES.items():
+        listing(Path("types") / kind / "index.html", label, [p for p in entries if p["meta"]["type"] == kind])
     for category in categories:
         listing(Path(category) / "index.html", LABELS.get(category, category),
-                [p for p in papers if p["category"] == category])
+                [p for p in entries if p["category"] == category])
     tagged = defaultdict(list)
-    for p in papers:
+    for p in entries:
         m = p["meta"]
         converter = markdown.Markdown(extensions=["extra", "toc", "sane_lists"], output_format="html5")
         rendered = converter.convert(p["body"])
         rewrite = LinkRewriter(p, pages)
         rewrite.feed(rendered)
         rewrite.close()
+        source_label = "原始論文" if m["type"] == "paper" else "原文"
         links = " · ".join(f'<a href="{escape(m[k], quote=True)}">{label}</a>'
-                           for k, label in (("paper_url", "原始論文"), ("code_url", "程式碼")) if m[k])
-        details = (f'<section class="paper-info" aria-label="論文資料">{overview(m)}'
-                   f'<p class="meta">發表 {m["published"]} · 收錄 {m["added"]}<br>'
-                   f'{escape("、".join(m["authors"]))} · {escape(m["venue"])}</p>'
+                           for k, label in (("source_url", source_label), ("code_url", "程式碼")) if m[k])
+        byline = " · ".join(value for value in ("、".join(m["authors"]), m["venue"]) if value)
+        details = (f'<section class="paper-info" aria-label="文章資料">{overview(m)}'
+                   f'<p class="meta"><a href="{relative_url(Path("types") / m["type"] / "index.html", p["output"])}">'
+                   f'{TYPES[m["type"]]}</a> · 發表 {m["published"] or "日期未詳"} · 收錄 {m["added"]}'
+                   f'{"<br>" + escape(byline) if byline else ""}</p>'
                    f'<p>{links}</p>{tags_html(m["tags"], p["output"])}</section>')
         page(p["output"], m["title"], m["summary"], details + '<article class="paper">' + "".join(rewrite.parts) + "</article>")
         for tag in m["tags"]:
@@ -219,8 +255,8 @@ def build(source: Path, output: Path) -> int:
         listing(tag_path(tag), f"標籤：{tag}", tagged[tag])
     add(Path("_static/style.css"), (ROOT / "web/style.css").read_bytes())
     add(Path(".nojekyll"), "")
-    for asset in files:
-        rel = asset.relative_to(source)
+    for asset, src in files:
+        rel = asset.relative_to(src)
         if asset.is_file() and "assets" in rel.parts[:-1] and asset.suffix.lower() != ".md":
             if not any(part.startswith(".") for part in rel.parts):
                 add(rel, asset.read_bytes())
@@ -261,21 +297,21 @@ def build(source: Path, output: Path) -> int:
     for name in previous_set - current:
         destination(name).unlink(missing_ok=True)
     manifest.write_text(json.dumps(sorted(current), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return len(papers)
+    return len(entries)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="將技術論文 Markdown 轉成靜態 HTML 網站")
-    parser.add_argument("--source", type=Path, default=ROOT / "papers", help="Markdown 來源目錄（預設：腳本旁的 papers）")
+    parser = argparse.ArgumentParser(description="將技術論文與深度文章的 Markdown 筆記轉成靜態 HTML 網站")
+    parser.add_argument("--source", type=Path, action="append", help="Markdown 來源目錄，可重複指定（預設：腳本旁的 papers 和 articles）")
     parser.add_argument("--output", type=Path, default=ROOT / "site", help="HTML 輸出目錄（預設：腳本旁的 site）")
     args = parser.parse_args()
     try:
         output = args.output.expanduser().resolve()
-        count = build(args.source.expanduser().resolve(), output)
+        count = build(args.source if args.source is not None else [ROOT / "papers", ROOT / "articles"], output)
     except (OSError, ValueError, KeyError) as exc:
         print(f"生成失敗：{exc}", file=sys.stderr)
         return 1
-    print(f"已生成 {count} 篇論文：{output / 'index.html'}")
+    print(f"已生成 {count} 篇內容：{output / 'index.html'}")
     return 0
 
 
