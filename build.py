@@ -7,8 +7,9 @@ import argparse
 from collections import defaultdict
 from datetime import date
 import hashlib
-from html import escape
+from html import escape, unescape
 from html.parser import HTMLParser
+import math
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -187,73 +188,194 @@ def build(source: Path | list[Path], output: Path) -> int:
         generated_names.add(name)
         generated[path] = content.encode("utf-8") if isinstance(content, str) else content
 
+    category_counts = {c: sum(p["category"] == c for p in entries) for c in categories}
+    type_counts = {kind: sum(p["meta"]["type"] == kind for p in entries) for kind in TYPES}
+    tag_counts = defaultdict(int)
+    for entry in entries:
+        body = entry["body"]
+        cjk = len(re.findall(r"[\u3400-\u9fff]", body))
+        words = len(re.findall(r"[A-Za-z0-9]+", body))
+        entry["minutes"] = max(1, math.ceil(cjk / 400 + words / 220))
+        for tag in entry["meta"]["tags"]:
+            tag_counts[tag] += 1
+
     def tags_html(tags, page):
         return '<div class="tags">' + "".join(
             f'<a class="tag" href="{relative_url(tag_path(t), page)}">{escape(t)}</a>' for t in tags) + "</div>"
 
-    def overview(meta):
-        label = "一句話用途" if meta["type"] == "paper" else "一句話重點"
-        content = (f'<div class="plain-summary"><span class="summary-label">{label}</span>'
-                   f'<p>{escape(meta["one_liner"])}</p></div>')
-        if meta["summary"] != meta["one_liner"]:
-            content += f'<p class="summary-detail">{escape(meta["summary"])}</p>'
-        return content
+    def type_link(kind, path):
+        return (f'<a class="type-badge type-{kind}" href="{relative_url(Path("types") / kind / "index.html", path)}">'
+                f'{TYPES[kind]}</a>')
 
-    def page(path, title, description, content):
-        nav = (f'<p><a href="{relative_url(Path("index.html"), path)}">全部收錄</a></p>'
-               '<p><strong>內容類型</strong></p><ul>' + "".join(
-                   f'<li><a href="{relative_url(Path("types") / kind / "index.html", path)}">{label}</a></li>'
-                   for kind, label in TYPES.items()) + "</ul>")
-        nav += '<p><strong>主題分類</strong></p><ul>' + "".join(
-            f'<li><a href="{relative_url(Path(c) / "index.html", path)}">{escape(LABELS.get(c, c))}</a></li>'
-            for c in categories) + "</ul>"
+    def page(path, title, description, content, page_class="listing-page", active_category=None, active_type=None):
+        def nav_link(target, label, count, active=False):
+            current = ' aria-current="page"' if active else ""
+            return f'<a href="{relative_url(target, path)}"{current}>{escape(label)}<span class="nav-count">{count:02d}</span></a>'
+        primary = nav_link(Path("index.html"), "全部收錄", len(entries), path == Path("index.html"))
+        primary += "".join(nav_link(Path("types") / kind / "index.html", label, type_counts[kind], kind == active_type)
+                           for kind, label in TYPES.items())
+        def subject(c):
+            active = ' aria-current="page"' if c == active_category else ""
+            return (f'<li><a href="{relative_url(Path(c) / "index.html", path)}"{active}>'
+                    f'<span>{escape(LABELS.get(c, c))}</span><small>{category_counts[c]:02d}</small></a></li>')
+        populated = [c for c in categories if category_counts[c]]
+        empty_categories = [c for c in categories if not category_counts[c]]
+        nav = ('<div class="nav-section"><p class="nav-label">主題索引 / SUBJECTS</p><ul class="subject-list">'
+               + "".join(subject(c) for c in populated) + '</ul>')
+        if empty_categories:
+            opened = " open" if active_category in empty_categories else ""
+            nav += (f'<details class="empty-subjects"{opened}><summary>其他主題</summary><ul class="subject-list">'
+                    + "".join(subject(c) for c in empty_categories) + '</ul></details>')
+        nav += '</div>'
+        if tag_counts:
+            tags = sorted(tag_counts, key=lambda t: (-tag_counts[t], t))[:8]
+            nav += ('<div class="nav-section"><p class="nav-label">常見標籤 / TOPICS</p><div class="tag-cloud">'
+                    + "".join(f'<a class="tag" href="{relative_url(tag_path(t), path)}">{escape(t)}</a>' for t in tags)
+                    + '</div></div>')
+        nav += '<div class="sidebar-note"><strong>一份持續生長的閱讀筆記</strong>從白話重點開始，循著方法與觀點，讀懂值得留下的內容。</div>'
         add(path, template.substitute(title=escape(title), description=escape(description, quote=True),
             stylesheet=relative_url(Path("_static/style.css"), path),
-            home=relative_url(Path("index.html"), path), navigation=nav, content=content))
+            script=relative_url(Path("_static/site.js"), path),
+            favicon=relative_url(Path("_static/favicon.svg"), path),
+            search_url=relative_url(Path("search.html"), path), page_class=page_class,
+            home=relative_url(Path("index.html"), path), primary_navigation=primary, navigation=nav, content=content))
 
-    def listing(path, title, entries):
-        content = f"<h1>{escape(title)}</h1><p class=\"meta\">共 {len(entries)} 篇 · 按收錄日期排序</p>"
-        if not entries:
-            content += "<p>尚未收錄內容。</p>"
-        for p in entries:
-            m = p["meta"]
-            content += (f'<article class="paper-card"><h2><a href="{relative_url(p["output"], path)}">'
-                        f'{escape(m["title"])}</a></h2>{overview(m)}<p class="meta">'
-                        f'<a href="{relative_url(Path("types") / m["type"] / "index.html", path)}">{TYPES[m["type"]]}</a> · '
-                        f'發表 {m["published"] or "日期未詳"} · '
-                        f'收錄 {m["added"]} · {escape(LABELS.get(p["category"], p["category"]))}</p>'
-                        f'{tags_html(m["tags"], path)}</article>')
-        page(path, title, f"{title}，共 {len(entries)} 篇閱讀筆記。", content)
+    def card(entry, path, number=0, featured=False, heading="h2"):
+        m = entry["meta"]
+        target = relative_url(entry["output"], path)
+        label = "一句話用途" if m["type"] == "paper" else "一句話重點"
+        search = " ".join([m["title"], m["one_liner"], m["summary"], m["venue"],
+                           LABELS.get(entry["category"], entry["category"]), *m["tags"], *m["authors"]])
+        extra_class = " featured" if featured else ""
+        serial = "最新收錄 / " if featured else ""
+        text = (f'<article class="entry-card{extra_class}" data-type="{m["type"]}" data-search="{escape(search, quote=True)}">'
+                f'<div class="card-top">{type_link(m["type"], path)}'
+                f'<a class="card-category" href="{relative_url(Path(entry["category"]) / "index.html", path)}">'
+                f'{escape(LABELS.get(entry["category"], entry["category"]))}</a>'
+                f'<span class="card-index">{serial}{number:02d}</span></div>'
+                f'<span class="summary-label">{label}</span>'
+                f'<{heading}><a href="{target}">{escape(m["one_liner"])}</a></{heading}>'
+                f'<p class="original-title"><a href="{target}">{escape(m["title"])}</a></p>')
+        if featured and m["summary"] != m["one_liner"]:
+            text += f'<div class="card-summary"><p>{escape(m["summary"])}</p></div>'
+        text += tags_html(m["tags"], path)
+        text += (f'<div class="card-footer"><span>收錄 <time datetime="{m["added"]}">{m["added"].replace("-", ".")}</time>'
+                 f' · 約 {entry["minutes"]} 分鐘</span><a href="{target}" aria-label="閱讀：{escape(m["title"], quote=True)}">'
+                 '閱讀筆記 <span aria-hidden="true">↗</span></a></div></article>')
+        return text
 
-    listing(Path("index.html"), "最新收錄", entries)
+    def listing(path, title, selected, active_category=None, active_type=None):
+        home = path == Path("index.html")
+        if home:
+            content = ('<section class="home-intro"><div><p class="eyebrow">A READING ARCHIVE · BY OX</p>'
+                       '<h1>探索技術，<br><span>理解更大的世界。</span></h1>'
+                       '<p class="intro-text">從一個清楚的問題出發，讀懂方法與觀點。</p></div>'
+                       f'<dl class="archive-stats"><div><dd>{len(entries):02d}</dd><dt>篇收錄</dt></div>'
+                       f'<div><dd>{sum(n > 0 for n in category_counts.values()):02d}</dd><dt>個主題</dt></div></dl></section>')
+        else:
+            descriptions = {"paper": "從用途出發，理解技術如何運作，以及可以走多遠。",
+                            "article": "讀懂作者的問題、觀點與推理，留下自己的思考。"}
+            description = descriptions.get(active_type, "沿著同一條線索，繼續探索值得理解的內容。")
+            if path == Path("search.html"):
+                description = "搜尋標題、摘要、標籤、作者與來源，找到下一篇想讀的內容。"
+            content = (f'<header class="list-intro"><p class="eyebrow">READING INDEX</p><h1>{escape(title)}</h1>'
+                       f'<p class="intro-text">{description}</p></header>')
+        if selected:
+            content += ('<form class="archive-search enhanced-only" role="search" aria-label="搜尋此列表">'
+                        '<label class="search-field"><svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">'
+                        '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg>'
+                        '<span class="sr-only">搜尋標題、摘要或標籤</span><input name="q" type="search" '
+                        'placeholder="搜尋標題、摘要或標籤…" autocomplete="off"></label>'
+                        '<label class="sr-only" for="type-filter">內容類型</label><select name="type" id="type-filter">'
+                        '<option value="">所有類型</option><option value="paper">技術論文</option>'
+                        '<option value="article">深度文章</option></select><button class="clear-search" type="button">清除</button></form>')
+        section_title = "最新筆記" if home else "收錄內容"
+        content += (f'<div class="section-heading"><h2>{section_title}</h2>'
+                    f'<p><span class="result-count" role="status" aria-live="polite">共 {len(selected)} 篇</span> · 最近收錄優先</p></div>')
+        content += '<div class="entry-grid">' + "".join(card(p, path, i, home and i == 1) for i, p in enumerate(selected, 1)) + '</div>'
+        if not selected:
+            content += (f'<section class="empty-state"><h2>這裡的筆記，正等待下一次發現。</h2><p>目前尚未收錄內容。</p>'
+                        f'<a href="{relative_url(Path("index.html"), path)}">先逛逛全部收錄 →</a></section>')
+        content += ('<section class="empty-state search-empty" hidden><h2>沒有找到符合的內容</h2>'
+                    '<p>試試較短的關鍵字，或清除類型篩選。</p><button type="button">清除篩選</button></section>')
+        page(path, title, f"{title}，共 {len(selected)} 篇閱讀筆記。", content,
+             "home-page" if home else "listing-page", active_category, active_type)
+
+    listing(Path("index.html"), "探索技術，理解更大的世界", entries)
+    listing(Path("search.html"), "找一篇值得讀的內容", entries)
     for kind, label in TYPES.items():
-        listing(Path("types") / kind / "index.html", label, [p for p in entries if p["meta"]["type"] == kind])
+        listing(Path("types") / kind / "index.html", label, [p for p in entries if p["meta"]["type"] == kind], active_type=kind)
     for category in categories:
         listing(Path(category) / "index.html", LABELS.get(category, category),
-                [p for p in entries if p["category"] == category])
+                [p for p in entries if p["category"] == category], active_category=category)
     tagged = defaultdict(list)
     for p in entries:
-        m = p["meta"]
+        m, path = p["meta"], p["output"]
         converter = markdown.Markdown(extensions=["extra", "toc", "sane_lists"], output_format="html5")
         rendered = converter.convert(p["body"])
+        # Move an existing Markdown title into the article header while retaining its anchor.
+        first_heading = re.match(r"\s*<h1\b([^>]*)>.*?</h1>", rendered, re.DOTALL)
+        title_id = "entry-title"
+        if first_heading:
+            anchor = re.search(r'id="([^"]*)"', first_heading.group(1))
+            if anchor:
+                title_id = anchor.group(1)
+            rendered = rendered[first_heading.end():]
+        # The generated reading rail replaces [TOC], including in older notes.
+        if converter.toc.strip():
+            rendered = rendered.replace(converter.toc.strip(), "")
         rewrite = LinkRewriter(p, pages)
         rewrite.feed(rendered)
         rewrite.close()
-        source_label = "原始論文" if m["type"] == "paper" else "原文"
-        links = " · ".join(f'<a href="{escape(m[k], quote=True)}">{label}</a>'
-                           for k, label in (("source_url", source_label), ("code_url", "程式碼")) if m[k])
+        headings = []
+        def collect_headings(tokens):
+            for token in tokens:
+                if token["level"] in (2, 3):
+                    sub = ' class="toc-sub"' if token["level"] == 3 else ""
+                    headings.append(f'<li{sub}><a href="#{escape(token["id"], quote=True)}">{escape(unescape(token["name"]))}</a></li>')
+                collect_headings(token["children"])
+        collect_headings(converter.toc_tokens)
+        source_label = "閱讀原始論文 ↗" if m["type"] == "paper" else "閱讀原文 ↗"
+        links = "".join(f'<a href="{escape(m[k], quote=True)}">{label}</a>'
+                        for k, label in (("source_url", source_label), ("code_url", "程式碼 ↗")) if m[k])
+        breadcrumb = (f'<nav class="breadcrumbs" aria-label="文章路徑"><a href="{relative_url(Path("index.html"), path)}">全部收錄</a>'
+                      f'<span aria-hidden="true">/</span><a href="{relative_url(Path("types") / m["type"] / "index.html", path)}">{TYPES[m["type"]]}</a>'
+                      f'<span aria-hidden="true">/</span><a href="{relative_url(Path(p["category"]) / "index.html", path)}">'
+                      f'{escape(LABELS.get(p["category"], p["category"]))}</a></nav>')
         byline = " · ".join(value for value in ("、".join(m["authors"]), m["venue"]) if value)
-        details = (f'<section class="paper-info" aria-label="文章資料">{overview(m)}'
-                   f'<p class="meta"><a href="{relative_url(Path("types") / m["type"] / "index.html", p["output"])}">'
-                   f'{TYPES[m["type"]]}</a> · 發表 {m["published"] or "日期未詳"} · 收錄 {m["added"]}'
-                   f'{"<br>" + escape(byline) if byline else ""}</p>'
-                   f'<p>{links}</p>{tags_html(m["tags"], p["output"])}</section>')
-        page(p["output"], m["title"], m["summary"], details + '<article class="paper">' + "".join(rewrite.parts) + "</article>")
+        content = (breadcrumb + f'<header class="article-header">{type_link(m["type"], path)}'
+                   f'<h1 id="{escape(title_id, quote=True)}">{escape(m["title"])}</h1><div class="article-meta">'
+                   f'<span>發表 {m["published"] or "日期未詳"}</span><span>收錄 {m["added"]}</span>'
+                   f'<span>約 {p["minutes"]} 分鐘閱讀</span></div>'
+                   + (f'<p class="article-byline">{escape(byline)}</p>' if byline else "") + '</header>')
+        label = "一句話用途" if m["type"] == "paper" else "一句話重點"
+        lead = (f'<section class="article-lead" aria-label="{label}"><span class="summary-label">{label}</span>'
+                f'<p class="one-liner">{escape(m["one_liner"])}</p>')
+        if m["summary"] != m["one_liner"]:
+            lead += f'<p class="summary-detail">{escape(m["summary"])}</p>'
+        if links:
+            lead += f'<div class="source-links">{links}</div>'
+        lead += '</section>'
+        content += ('<div class="article-layout"><div class="article-main">' + lead
+                    + '<article class="prose">' + "".join(rewrite.parts) + '</article>'
+                    + '<div class="article-end"><p class="nav-label">繼續探索</p>' + tags_html(m["tags"], path) + '</div></div>')
+        if headings:
+            content += '<details class="article-toc" open><summary>本篇目錄</summary><ol>' + "".join(headings) + '</ol></details>'
+        content += '</div>'
+        related = [other for other in entries if other != p and
+                   (set(m["tags"]) & set(other["meta"]["tags"]) or other["category"] == p["category"])]
+        related.sort(key=lambda other: len(set(m["tags"]) & set(other["meta"]["tags"])), reverse=True)
+        if related:
+            content += ('<section class="related-reading"><div class="section-heading"><h2>沿著這個問題，繼續讀</h2>'
+                        '<p>相關主題與標籤</p></div><div class="entry-grid">'
+                        + "".join(card(other, path, i, heading="h3") for i, other in enumerate(related[:2], 1)) + '</div></section>')
+        page(path, m["title"], m["summary"], content, "article-page", p["category"], m["type"])
         for tag in m["tags"]:
             tagged[tag].append(p)
     for tag in sorted(tagged):
-        listing(tag_path(tag), f"標籤：{tag}", tagged[tag])
-    add(Path("_static/style.css"), (ROOT / "web/style.css").read_bytes())
+        listing(tag_path(tag), f"標籤 / {tag}", tagged[tag])
+    for asset_name in ("style.css", "site.js", "favicon.svg"):
+        add(Path("_static") / asset_name, (ROOT / "web" / asset_name).read_bytes())
     add(Path(".nojekyll"), "")
     for asset, src in files:
         rel = asset.relative_to(src)

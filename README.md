@@ -25,6 +25,16 @@ python -m http.server 8000 --directory site
 
 瀏覽 <http://localhost:8000>。按 `Ctrl+C` 停止預覽。
 
+## 閱讀介面
+
+- 首頁以最新收錄和閱讀卡片呈現，每張卡片先顯示一句白話用途或重點，再列出原文標題、標籤與收錄日期。
+- 搜尋可比對標題、一句話重點、摘要、標籤、作者、來源名稱及主題名稱，並搭配內容類型篩選。多個關鍵字以空白分隔，會尋找同時符合的內容；不搜尋整篇正文。
+- 首頁及「搜尋內容」頁搜尋全部收錄；分類、類型和標籤頁僅搜尋目前列表。搜尋條件會保留在網址中，方便收藏或分享。
+- 文章頁包含白話重點、原文連結、發表與收錄日期、自動目錄，以及依相同主題或標籤挑選的延伸閱讀。
+- 閱讀時間依正文的中文字數與英文詞數粗估，僅供參考。
+- 窄螢幕使用單欄卡片與可展開的主題導覽、文章目錄。深淺色預設跟隨系統，也可手動切換並記住偏好。
+- 搜尋和手動切換主題使用少量原生 JavaScript；停用 JavaScript 時仍可閱讀文章、瀏覽分類及使用目錄。
+
 ## 目錄結構
 
 | 路徑 | 用途 |
@@ -34,7 +44,9 @@ python -m http.server 8000 --directory site
 | `templates/paper.md` | 新論文範本，不參與預設的網站生成 |
 | `templates/article.md` | 深度文章整理範本，不要求實驗數據或遊戲應用 |
 | `web/page.html` | 所有頁面共用的 HTML 版型 |
-| `web/style.css` | 網站樣式，支援窄螢幕及系統深淺色偏好 |
+| `web/style.css` | 網站樣式，包含桌面、手機、深淺色及列印版面 |
+| `web/site.js` | 搜尋、類型篩選、深淺色切換與導覽展開狀態 |
+| `web/favicon.svg` | 網站分頁圖示 |
 | `papers/rendering/` | 渲染、光照、材質、幾何表示 |
 | `papers/simulation/` | 物理、碰撞、流體、破壞模擬 |
 | `papers/animation/` | 動畫、IK、動作生成 |
@@ -93,7 +105,7 @@ Copy-Item templates/article.md articles/culture/2026/example-essay/index.md
 | `published` | 原始發表日期，`YYYY-MM-DD`。論文必填；深度文章不詳時可省略或填 `""`，網站顯示「日期未詳」 |
 | `added` | 必填：本站收錄日期，`YYYY-MM-DD`；首頁主要排序依據 |
 | `one_liner` | 新文章應填：一句最簡單的用途或重點；論文顯示「一句話用途」，深度文章顯示「一句話重點」。舊文省略時暫用 `summary`，不會自動白話改寫 |
-| `summary` | 必填：一兩句白話補充方法或核心觀點，顯示於一句話下方並用作網頁描述 |
+| `summary` | 必填：一兩句白話補充方法或核心觀點，顯示於首頁最新收錄卡片及文章開頭，並用作網頁描述及搜尋依據 |
 | `authors` | 作者字串清單；可省略或填 `[]` |
 | `venue` | 出處：會議、期刊、媒體、網站或部落格名稱；可省略或留空 |
 | `source_url` | 原文的完整 HTTP(S) URL，兩種類型皆可使用；可省略或留空。多來源整理可留空並在正文逐一列出 |
@@ -123,7 +135,7 @@ Copy-Item templates/article.md articles/culture/2026/example-essay/index.md
 不要填入猜測的發表日期；需填寫完整日期的來源應先查證。
 
 正文支援標題、表格、程式碼區塊、註腳及一般 Markdown。
-在正文加入 `[TOC]` 可產生目錄。
+文章頁會自動依二、三級標題產生閱讀目錄；舊文中的 `[TOC]` 會併入同一份目錄，避免重複顯示。
 目前沒有加入數學公式排版、Mermaid 渲染或程式碼語法上色。
 
 ### 圖片與文章連結
@@ -181,6 +193,7 @@ python build.py --output "E:/Websites/tech-news"
 | `papers/rendering/2026/example-paper/assets/overview.png` | `site/rendering/2026/example-paper/assets/overview.png` |
 | `articles/culture/2026/example-essay/index.md` | `site/culture/2026/example-essay/index.html` |
 | 全部文章 metadata | `site/index.html` |
+| 全部文章搜尋 | `site/search.html` |
 | 所有 `paper` 類型 | `site/types/paper/index.html` |
 | 所有 `article` 類型 | `site/types/article/index.html` |
 | `rendering` 分類 | `site/rendering/index.html` |
