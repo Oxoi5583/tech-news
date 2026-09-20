@@ -44,7 +44,7 @@ python -m http.server 8000 --directory site
 | `templates/paper.md` | 新論文範本，不參與預設的網站生成 |
 | `templates/article.md` | 深度文章整理範本，不要求實驗數據或遊戲應用 |
 | `web/page.html` | 所有頁面共用的 HTML 版型 |
-| `web/style.css` | 網站樣式，包含桌面、手機、深淺色及列印版面 |
+| `web/style.css` | 網站樣式原始檔，生成時完整嵌入每頁 HTML；包含桌面、手機、深淺色及列印版面 |
 | `web/site.js` | 搜尋、類型篩選、深淺色切換與導覽展開狀態 |
 | `web/favicon.svg` | 網站分頁圖示 |
 | `papers/rendering/` | 渲染、光照、材質、幾何表示 |
@@ -214,6 +214,8 @@ python build.py --output "E:/Websites/tech-news"
 - 再次生成會覆寫受管理的檔案，並刪除已不再使用的受管理檔案，例如被移除文章的 HTML。
 - 不會清空整個輸出目錄；遇到同名的非受管理檔案會停止，其他檔案保留。
 - 不要手動修改生成的 HTML，請修改 Markdown 或 `web/` 中的版型後重建。
+- CSS 會直接放進每頁 HTML 的 `<style>` 中，不再另外載入樣式檔，避免新版頁面配上舊版 CSS。`web/style.css` 仍是樣式的編輯來源，修改後重新生成即可。
+- JavaScript 及分頁圖示的網址會附上依檔案內容計算的版本參數。若重建後瀏覽器仍顯示舊 HTML，可先按 `Ctrl+F5` 強制重新載入。
 - 保留 manifest 才能持續辨認生成檔案；遺失時請改用新的空輸出目錄。
 - 每次僅執行一個建置程序。這是本機檔案生成工具，多個檔案的寫入不具整批原子性。
 

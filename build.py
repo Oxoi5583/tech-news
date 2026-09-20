@@ -177,6 +177,11 @@ def build(source: Path | list[Path], output: Path) -> int:
     if any(c in RESERVED for c in categories):
         raise ValueError("來源分類不能使用保留名稱 tags、types 或 _static")
     template = Template((ROOT / "web/page.html").read_text(encoding="utf-8"))
+    stylesheet = (ROOT / "web/style.css").read_text(encoding="utf-8")
+    assets = {name: (ROOT / "web" / name).read_bytes()
+              for name in ("site.js", "favicon.svg")}
+    asset_versions = {name: hashlib.sha256(content).hexdigest()[:16]
+                      for name, content in assets.items()}
     generated: dict[Path, bytes] = {}
     generated_names: set[str] = set()
 
@@ -207,6 +212,10 @@ def build(source: Path | list[Path], output: Path) -> int:
         return (f'<a class="type-badge type-{kind}" href="{relative_url(Path("types") / kind / "index.html", path)}">'
                 f'{TYPES[kind]}</a>')
 
+    def asset_url(name, path):
+        # New asset contents must not reuse a browser's cached JavaScript or icon.
+        return f'{relative_url(Path("_static") / name, path)}?v={asset_versions[name]}'
+
     def page(path, title, description, content, page_class="listing-page", active_category=None, active_type=None):
         def nav_link(target, label, count, active=False):
             current = ' aria-current="page"' if active else ""
@@ -234,9 +243,9 @@ def build(source: Path | list[Path], output: Path) -> int:
                     + '</div></div>')
         nav += '<div class="sidebar-note"><strong>一份持續生長的閱讀筆記</strong>從白話重點開始，循著方法與觀點，讀懂值得留下的內容。</div>'
         add(path, template.substitute(title=escape(title), description=escape(description, quote=True),
-            stylesheet=relative_url(Path("_static/style.css"), path),
-            script=relative_url(Path("_static/site.js"), path),
-            favicon=relative_url(Path("_static/favicon.svg"), path),
+            stylesheet=stylesheet,
+            script=asset_url("site.js", path),
+            favicon=asset_url("favicon.svg", path),
             search_url=relative_url(Path("search.html"), path), page_class=page_class,
             home=relative_url(Path("index.html"), path), primary_navigation=primary, navigation=nav, content=content))
 
@@ -374,8 +383,8 @@ def build(source: Path | list[Path], output: Path) -> int:
             tagged[tag].append(p)
     for tag in sorted(tagged):
         listing(tag_path(tag), f"標籤 / {tag}", tagged[tag])
-    for asset_name in ("style.css", "site.js", "favicon.svg"):
-        add(Path("_static") / asset_name, (ROOT / "web" / asset_name).read_bytes())
+    for asset_name, content in assets.items():
+        add(Path("_static") / asset_name, content)
     add(Path(".nojekyll"), "")
     for asset, src in files:
         rel = asset.relative_to(src)
