@@ -1,12 +1,12 @@
 ---
 type: article
-title: "『Clair Obscur: Expedition 33』開発ポストモーテム【前編】キャラクター制作＆テクニカルアートから紐解くUE5活用術"
+title: "『Clair Obscur: Expedition 33』開発ポストモーテム：少人数チームがUE5標準機能を使い倒す方法"
 published: "2026-09-24"
-added: "2026-09-24"
+added: "2026-09-25"
 authors:
   - "稲庭 淳"
 venue: "CGWORLD"
-source_url: "https://cgworld.jp/article/202609-coe33-01.html"
+source_url: ""
 tags:
   - unreal-engine
   - technical-art
@@ -17,11 +17,15 @@ tags:
   - virtual-shadow-maps
   - small-team
   - production-pipeline
-one_liner: "《Expedition 33》的小團隊不是靠大量自研工具硬撐規模，而是盡量把角色、城市、陰影與程序化製作建立在 Unreal Engine 既有生態上，再只為真正需要的地方補工具。"
-summary: "CGWORLD 整理 Sandfall Interactive 的開發 Postmortem：4 人角色團隊如何組合 MetaHuman、ZBrush 與商用外掛製作近 120 個角色，以及唯一一名 Technical Artist 如何利用 Nanite、Virtual Shadow Maps、Houdini、VAT 和 Instance Data 支撐大規模場景。文章最值得理解的是，小團隊的技術策略並非凡事自研，而是降低每次內容迭代需要跨工具、重做 LOD、烘焙光照與維護特殊資產的成本。"
+  - blueprint
+  - sequencer
+  - continuous-integration
+  - perforce
+one_liner: "《Expedition 33》的小團隊把「不要自研已有答案的東西」貫穿角色、場景、戰鬥、演出與建置流程，讓少量程式與美術人力集中在真正決定作品特色的地方。"
+summary: "CGWORLD 前後篇整理 Sandfall Interactive 的開發 Postmortem：4 人角色團隊與單一 Technical Artist 如何利用既有工具支撐大量內容，後篇再揭示 95% Gameplay Logic 使用 Blueprint、戰鬥與 Cutscene 大量由 Sequencer 驅動，並以 Unreal 標準功能、CI 與資料驅動流程降低少人團隊的維護成本。"
 ---
 
-# 『Clair Obscur: Expedition 33』開発ポストモーテム【前編】キャラクター制作＆テクニカルアートから紐解くUE5活用術
+# 『Clair Obscur: Expedition 33』開發 Postmortem：少人團隊如何把 UE5 當成共同製作語言
 
 ## 這篇在談甚麼
 
@@ -202,9 +206,138 @@ Artist 把時間留給造型、構圖、修改與判斷
 
 這可能比「小團隊如何做到 AAA 畫面」這種較表面的敘述更接近實際工程問題。
 
+## 後篇補充：Sequencer 不只是 Cutscene Tool，而是戰鬥演出的共同時間軸
+
+CGWORLD 在 9 月 25 日公開同一場 Postmortem 的後篇。Creative Director Guillaume Broche 說自己一半以上開發時間都在 Sequencer；更重要的是，《Expedition 33》的戰鬥在結構上可以理解成「一連串 Sequence 的鏈式播放」。
+
+Menu Transition、Camera、Character Switch 與玩家技能演出都可以由 Sequence 組合。大部分角色又共享 UE5 標準 Skeleton，並以 Tag 綁定，因此同一份 Sequence 可以套到不同角色。
+
+這種做法的價值不是「Cutscene 做得很方便」，而是把多個 Discipline 的資料放進同一個可視時間軸：
+
+```text
+Gameplay Event
+    ↓
+Sequencer
+ ├─ Camera
+ ├─ Character Animation
+ ├─ Light
+ ├─ VFX
+ └─ Timing
+```
+
+對 Turn-based RPG 特別合適，因為玩家技能發動時的時間與鏡頭相對可控。文章也指出敵方攻擊因 Target 與位置更動，Camera Angle 不像玩家技能那麼容易預製，只能利用 FoV 與 Time Dilation 等手段改善可讀性；因此這不是能無條件套到所有 Action Game 的方案。
+
+## Cutscene Pipeline：只清理鏡頭真正看得到的資料
+
+6 人需要製作約 4 小時 30 分鐘 Cutscene，因此團隊把品質拆成 L0 / L1 / L2：
+
+```text
+Mocap
+ ↓
+L0：快速得到 Rough Cut
+ ↓
+只清理畫面實際會看到的部分
+ ↓
+L1：完成 Camera / Staging
+ ↓
+L2：加入 VFX / Sound
+```
+
+甚至角色牽手等昂貴接觸動作，也會在適合時直接用 Camera 遮掉，而不是為不可見部分支付完整 Animation Cleanup 成本。
+
+但這不等於全面降低品質。團隊幾乎每個 Shot 都有專用 Lighting，也建立共用 Facial Blueprint 為眼睛、皮膚加入細微動態。真正的原則是：**品質成本集中在最後會進入玩家視野的資訊上。**
+
+## 4 名 Programmer：95% Gameplay Logic 用 Blueprint
+
+Technical Director Tom Guillermin 公開的數字很有代表性：團隊只有 4 名 Programmer，而約 95% Gameplay Logic 使用 Blueprint。
+
+Sandfall 的工程原則是：
+
+- 不對 Engine 做大型修改或 Refactor；
+- 能用 Unreal 原生工具就不自研；
+- Skill / Item 用 Data Asset 定義；
+- Buff、Status、Passive 與敵人特殊行為大量以 Blueprint 組合；
+- 約使用 30 個 Unreal 標準 Plugin，加上約 25 個第三方 Plugin。
+
+他們曾自行實作 UI Navigation，後來因維護複雜而改回 CommonUI。這個失敗例子比「用了很多 UE 功能」更重要：**自研系統的成本不是第一次寫完，而是之後所有人都必須持續理解與維護它。**
+
+因此 Sandfall 不是把 Programmer 當成每個 Feature 的必經入口，而是讓 Programmer 建立 Designer 可以自己組合內容的底座：
+
+```text
+Programmer
+    ↓
+穩定的 Gameplay Primitives / Data Contract
+    ↓
+Designer
+    ↓
+Data Asset + Blueprint + Sequencer
+    ↓
+大量實際 Gameplay Content
+```
+
+這和前篇 Technical Art 的做法其實是同一件事：把會隨內容數量線性增加的重複工作，移到可重用的系統或現成工具。
+
+## CI：每天都產生一個真的可以玩的版本
+
+開發環境使用 Perforce、Unreal Game Sync 與 TeamCity。TeamCity 每晚自動 Packaging，並把 Build 上傳 Steam；失敗時透過 Discord 通知。
+
+這看似只是普通 CI，但對小團隊的意義很實際：Build 是否仍然成立，不需要等到某個人「有空時再 Build 一次」。
+
+```text
+Daily Changes
+    ↓
+Nightly TeamCity
+    ↓
+Package
+    ↓
+Upload to Steam
+    ↓
+Success / Discord Failure Alert
+```
+
+它把「專案現在到底能不能完整 Build」從人類記憶與習慣，轉成每天由機器重新驗證的條件。
+
+## 少人團隊的真正邊界：不要把管理也做成主要工作
+
+Round Table 裡，Sandfall 表示未來仍希望維持 30 人以下。理由不是「30 是神奇數字」，而是人數增加後，管理本身開始吃掉創作時間，也更難維持清楚的 Creative Vision。
+
+需要特定階段才大量投入的 QA 等工作則 Outsource。也就是把團隊拆成：
+
+```text
+長期需要共享脈絡的人
+        ↓
+Core Team
+
+只在特定階段需要的能力
+        ↓
+External / Outsource
+```
+
+這和「小團隊甚麼都自己做」正好相反。Sandfall 的小團隊成立，是因為它把 Engine、Plugin、工具生態與 Outsourcing 都視為外部能力的一部分。
+
+## UE 作為共同語言，也會帶來黑箱問題
+
+Round Table 裡，《Persona 3 Reload》的山口拓也與《Hi-Fi RUSH》的 John Johanas 都提到 UE 讓 Artist / Designer 更容易自行 Prototype；但代價是 Engine 內部變得更像 Black Box。
+
+Guillermin 提出另一個實務角度：內製 Engine 的知識可能隨原開發者離職而消失，而 UE 的龐大使用者社群與公開知識反而降低了這種「只有公司內某個人知道」的風險。
+
+因此 Buy vs Build 不只是 Feature 與效能比較，也包含 **Knowledge Availability**：
+
+```text
+Internal Tool
+  → 高度符合需求
+  → 但知識可能集中在少數人
+
+Widely-used Engine
+  → 未必完全符合需求
+  → 但文件、社群、人才市場共同保存知識
+```
+
+這對長期維護其實是一種很現實的工程成本。
+
 ## 閱讀時需要知道的前提
 
-這篇是 CGWORLD 對 Sandfall Postmortem 前兩場 Session 的整理，不是完整技術文件。它沒有公開 Nanite / VSM 的底層實作、Houdini Graph、Shader Code、Profiling 數據或實際節省了多少人時，因此能可靠學到的是 Production Strategy、工具組合與問題拆法，而不是直接重現其 Pipeline。
+這份筆記合併 CGWORLD 對同一場 Sandfall Postmortem 的前後篇整理，不是完整技術文件。它沒有公開 Nanite / VSM 的底層實作、Houdini Graph、Shader Code、Profiling 數據或實際節省了多少人時，因此能可靠學到的是 Production Strategy、工具組合與問題拆法，而不是直接重現其 Pipeline。
 
 另外，Nanite 並不等於「完全不需要最佳化」；VSM 亦不等於「動態陰影沒有成本」。文章本身就提到 WPO Distance 與平台差異設定等實際最佳化工作。
 
@@ -231,3 +364,4 @@ Engine Runtime Asset
 ## 來源
 
 - [『Clair Obscur: Expedition 33』開発ポストモーテム【前編】キャラクター制作＆テクニカルアートから紐解くUE5活用術](https://cgworld.jp/article/202609-coe33-01.html)
+- [『Clair Obscur: Expedition 33』開発ポストモーテム【後編】シーケンサーとUE標準機能を使い倒す、Sandfall流のゲーム開発](https://cgworld.jp/article/202609-coe33-02.html)
