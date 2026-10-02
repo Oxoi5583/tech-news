@@ -156,6 +156,44 @@ Copy-Item templates/article.md articles/culture/2026/example-essay/index.md
 以相對路徑連接文章，圖片放入 `assets/`，才能直接搬移整個網站或部署到子路徑。
 Markdown 允許原始 HTML，請只生成你信任的筆記；這不是 HTML 清理工具。
 
+
+## 自動收錄與 GitHub 寫入
+
+這個 repository 也可由自動研究／文章雷達直接整理內容。自動收錄時，**repository 目前的 README 與 template 永遠是最高優先規則**，排程或外部提示只決定「找甚麼」，不應硬編碼舊格式。
+
+自動寫入至少遵守以下流程：
+
+1. 先讀取最新 `README.md`，再讀取對應的 `templates/paper.md` 或 `templates/article.md`。
+2. 先搜尋 `papers/`、`articles/` 與既有條目，確認不是同一論文、同一文章、等價 conference/session 整理或二手轉述的重複內容。
+3. 同一份內容只存一份；跨領域關係用 `tags` 表示。重大更新優先修改舊條目，不另建重複檔案。
+4. `added` 使用實際收錄日期；`published` 只使用可可靠驗證的完整原始日期，不補猜不存在的日數。
+5. 原始來源優先：論文使用原始論文／作者頁／官方程式碼；文章使用作者原文或第一手來源，不用二手摘要替代。
+6. 正文要把「原作者已證實的內容」與「整理者的延伸、遊戲用途或個人判斷」分開。
+7. 寫入 `main` 後，重新讀取目標檔案或 commit，確認內容真的落在目前 branch 上，才算完成。
+
+### GitHub 寫入容錯
+
+目前自動收錄預設先使用一般 Contents API（建立或更新檔案）。若單次寫入因連接器內容檢查、請求尺寸或其他**非 repository 權限**原因失敗，可以改用 Git object 流程：
+
+```text
+main latest commit/tree
+        ↓
+create blob
+        ↓
+create tree
+        ↓
+create commit
+        ↓
+update refs/heads/main
+        ↓
+fetch again and verify
+```
+
+fallback 只用於處理 API／連接器層面的寫入失敗，不用來繞過真正的 GitHub 權限、branch protection、merge conflict 或其他安全規則。遇到這些明確錯誤時應停止寫入並回報原因。
+
+不要為了讓一次 API call 成功，而把技術細節、來源、限制、論證弱點或必要 metadata 刪到失去閱讀價值；必要時應換寫入路徑，而不是犧牲內容品質。
+
+
 ## 指定來源及輸出路徑
 
 ```bash
